@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+    <!--
+        依赖安全检查抑制规则配置文件
+        
+        此文件用于忽略特定的依赖项或 CVE 漏洞。
+        项目级规则可以覆盖或补充组织级规则。
+        
+        使用示例：
+        1. 忽略特定的 CVE：
+           <suppress>
+               <cve>CVE-2024-12345</cve>
+           </suppress>
+        
+        2. 忽略特定的依赖包：
+           <suppress>
+               <packageUrl regex="true">pkg:maven/com\.example/.*@.*</packageUrl>
+           </suppress>
+        
+        3. 忽略特定依赖的特定 CVE：
+           <suppress>
+               <packageUrl regex="true">pkg:maven/org\.springframework/spring-core@.*</packageUrl>
+               <cve>CVE-2024-12345</cve>
+           </suppress>
+        
+        4. 忽略特定 CVSS 分数以下的漏洞：
+           <suppress>
+               <cve>CVE-2024-12345</cve>
+               <notes>CVSS 分数低于项目阈值，可接受风险</notes>
+           </suppress>
+    -->
+    
+    <!-- 示例：如果需要忽略某个特定的 CVE，取消下面的注释 -->
+    <!--
+    <suppress>
+        <notes>示例：忽略特定的 CVE</notes>
+        <cve>CVE-2024-XXXXX</cve>
+    </suppress>
+    -->
+    
+    <!-- 示例：如果需要忽略某个依赖包的所有漏洞，取消下面的注释 -->
+    <!--
+    <suppress>
+        <notes>示例：忽略特定依赖包的所有漏洞</notes>
+        <packageUrl regex="true">pkg:maven/com\.example/example-library@.*</packageUrl>
+    </suppress>
+    -->
+</suppressions>
+

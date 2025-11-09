@@ -212,8 +212,11 @@ touch .github/dependency-check-skip
 - 关键字不区分大小写
 - 必须由具有写权限的用户评论
 - **评论后会自动触发 workflow 重新运行**
-- 如果检测到跳过关键字，检查会被跳过并标记为成功
-- 如果后续有新的 commit，将重新执行检查（忽略之前的 skip 评论）
+- **跳过仅对本次触发有效**：如果检测到跳过关键字，检查会被跳过并标记为成功
+- **后续行为**：
+  - 如果后续有新的 commit，会触发 `pull_request` 事件，**将重新执行检查**（不检查 skip 评论）
+  - 如果后续有新的评论（不包含 skip 关键字），不会触发 workflow
+  - 如果后续有新的评论（包含 skip 关键字），会再次触发并跳过检查
 
 **重要提示**：
 - 确保 workflow 文件位于 `.github/workflows/` 目录下
@@ -222,6 +225,23 @@ touch .github/dependency-check-skip
   1. 仓库 Settings → Actions → General → 确保 "Allow all actions and reusable workflows" 已启用
   2. 确保评论是在 PR 上，而不是在普通的 Issue 上
   3. 可以尝试手动触发：Actions → Dependency Security Check → Run workflow
+
+**工作流程说明**：
+1. **添加 `[skip-dependency-check]` 评论**：
+   - 触发 `issue_comment` 事件
+   - 检测到 skip 关键字，跳过本次检查并标记为成功
+   - PR 可以合并
+
+2. **后续有新的 commit**：
+   - 触发 `pull_request` 事件
+   - **不检查 skip 评论**，正常执行依赖安全检查
+   - 如果检查失败，PR 无法合并
+
+3. **后续有新的评论（不包含 skip）**：
+   - 不会触发 workflow（因为没有 skip 关键字）
+
+4. **后续有新的评论（包含 skip）**：
+   - 再次触发 workflow，跳过检查并标记为成功
 
 ### 2. 自定义 CVSS 阈值
 

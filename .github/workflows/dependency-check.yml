@@ -139,38 +139,30 @@ jobs:
               '[skip-dependency check]'
             ];
             
-            // 获取 PR 编号
-            let prNumber = context.issue.number;
-            if (context.eventName === 'issue_comment') {
-              prNumber = context.issue.number;
-            } else if (context.eventName === 'pull_request') {
-              prNumber = context.issue.number;
-            }
-            
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber
-            });
-            
-            // 检查最新的评论（如果是 issue_comment 事件，检查触发事件的评论）
             let hasSkipKeyword = false;
+            
             if (context.eventName === 'issue_comment') {
-              // 如果是评论事件，检查触发事件的评论
+              // 对于 issue_comment 事件：只检查触发事件的评论
+              // 这样每次评论只会影响当前这次触发，后续新的 commit 或评论会重新检查
               const triggerComment = context.payload.comment.body.toLowerCase();
               hasSkipKeyword = skipKeywords.some(keyword => triggerComment.includes(keyword.toLowerCase()));
-            }
-            
-            // 也检查所有历史评论
-            if (!hasSkipKeyword) {
-              hasSkipKeyword = comments.some(comment => {
-                const body = comment.body.toLowerCase();
-                return skipKeywords.some(keyword => body.includes(keyword.toLowerCase()));
-              });
+              
+              if (hasSkipKeyword) {
+                console.log('✅ 在触发评论中发现跳过检查关键字，将跳过本次依赖安全检查');
+                console.log('ℹ️ 注意：此跳过仅对本次触发有效，后续新的 commit 或评论将重新执行检查');
+              }
+            } else if (context.eventName === 'pull_request') {
+              // 对于 pull_request 事件：不检查 skip 评论
+              // 因为这是新的 commit 触发的，应该正常执行检查
+              // 如果用户想跳过，应该在 commit 后添加评论来触发
+              hasSkipKeyword = false;
+              console.log('ℹ️ pull_request 事件：正常执行检查，不检查 skip 评论');
+            } else {
+              // workflow_dispatch 等其他事件：不检查 skip 评论
+              hasSkipKeyword = false;
             }
             
             if (hasSkipKeyword) {
-              console.log('✅ 在 PR 评论中发现跳过检查关键字，将跳过依赖安全检查');
               core.setOutput('skip', 'true');
             } else {
               core.setOutput('skip', 'false');

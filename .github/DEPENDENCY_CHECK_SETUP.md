@@ -205,13 +205,23 @@ touch .github/dependency-check-skip
 
 **示例评论**：
 ```
-[skip dependency check] 本次 PR 不涉及依赖变更，跳过检查
+[skip-dependency-check] 本次 PR 不涉及依赖变更，跳过检查
 ```
 
 **注意**：
 - 关键字不区分大小写
 - 必须由具有写权限的用户评论
-- 评论后需要重新触发 workflow（推送新提交或手动触发）
+- **评论后会自动触发 workflow 重新运行**
+- 如果检测到跳过关键字，检查会被跳过并标记为成功
+- 如果后续有新的 commit，将重新执行检查（忽略之前的 skip 评论）
+
+**重要提示**：
+- 确保 workflow 文件位于 `.github/workflows/` 目录下
+- 确保仓库的 Actions 权限已启用
+- 如果评论后没有触发 workflow，请检查：
+  1. 仓库 Settings → Actions → General → 确保 "Allow all actions and reusable workflows" 已启用
+  2. 确保评论是在 PR 上，而不是在普通的 Issue 上
+  3. 可以尝试手动触发：Actions → Dependency Security Check → Run workflow
 
 ### 2. 自定义 CVSS 阈值
 

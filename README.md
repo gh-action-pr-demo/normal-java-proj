@@ -143,30 +143,48 @@ jobs:
 
 用于检查依赖是否有新版本可用，帮助识别可能有安全修复的版本更新。
 
-## 分支保护设置
+## 分支保护设置 ⚠️ **必须配置**
 
-**重要**：为了确保 PR 必须通过安全检查才能合并，必须配置分支保护规则。
+**⚠️ 重要**：如果不配置分支保护规则，会出现以下问题：
+- ❌ PR 提交后，即使 Actions 还在运行，**Merge pull request** 按钮仍然可以点击
+- ❌ Actions 失败后，**Merge pull request** 按钮仍然可以点击
+- ❌ 无法强制要求通过安全检查才能合并
 
-### 快速配置
+**解决方案**：必须配置分支保护规则，将 Actions 状态检查设置为必需检查。
+
+### 快速配置步骤
 
 1. 进入 **Settings → Branches**
 2. 添加分支保护规则（针对 `main` 或 `master` 分支）
-3. 启用 **"Require status checks to pass before merging"**
-4. 启用 **"Require branches to be up to date before merging"**
-5. 在状态检查列表中选择：**`Dependency Security Check / OWASP Dependency Check`**
+3. **必须勾选**：**"Require status checks to pass before merging"**（合并前必须通过状态检查）
+4. **建议勾选**：**"Require branches to be up to date before merging"**（合并前分支必须是最新的）
+5. **必须添加**：在状态检查列表中选择：**`Dependency Security Check / OWASP Dependency Check`**
+6. **强烈建议勾选**：**"Do not allow bypassing the above settings"**（不允许绕过上述设置）
 
-> **注意**：状态检查名称格式为 `{workflow名称} / {job名称}`
+> **⚠️ 注意**：
+> - 状态检查名称格式为 `{workflow名称} / {job名称}`
+> - 名称必须完全匹配，包括大小写和空格
+> - 如果找不到状态检查，需要先让 workflow 运行一次（见详细配置指南）
 
 ### 详细配置指南
 
-请参考 [.github/BRANCH_PROTECTION_SETUP.md](.github/BRANCH_PROTECTION_SETUP.md) 获取详细的配置步骤和常见问题解答。
+**强烈建议阅读**：[.github/BRANCH_PROTECTION_SETUP.md](.github/BRANCH_PROTECTION_SETUP.md)
+
+包含：
+- 📋 详细的配置步骤（带截图说明）
+- ✅ 验证配置是否正确的方法
+- 🔍 常见问题解答（特别是 "Merge 按钮仍然可以点击" 的问题）
+- 🛠️ 故障排除指南
 
 ### 验证配置
 
-配置完成后：
-- ✅ Actions 运行期间，Merge 按钮会被禁用
-- ✅ 检查失败时，无法合并 PR
-- ✅ 只有所有必需检查通过后，才能合并
+配置完成后，当你创建 PR 时：
+
+- ✅ **Actions 运行期间**：**Merge pull request** 按钮会被禁用（灰色），无法点击
+- ✅ **Actions 失败时**：**Merge pull request** 按钮会被禁用，显示错误提示，无法合并
+- ✅ **所有检查通过后**：**Merge pull request** 按钮才会变为可点击状态
+
+如果不符合上述行为，请参考 [详细配置指南](.github/BRANCH_PROTECTION_SETUP.md) 进行故障排除。
 
 ## GitHub Actions 被禁用时的解决方案
 

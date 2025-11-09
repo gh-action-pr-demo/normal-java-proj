@@ -115,6 +115,7 @@ jobs:
             exit 1
           elif [ "${{ steps.dependency-check.outcome }}" == "success" ]; then
             echo "✅ 依赖安全检查通过"
+            exit 0
           else
             echo "⚠️ 检查状态: ${{ steps.dependency-check.outcome }}"
             exit 1

@@ -5,16 +5,53 @@ on:
     branches:
       - main
       - master
+  issue_comment:
+    types: [created]
   workflow_dispatch:
 
+# 只在 PR 相关的事件时运行
 jobs:
+  check-if-pr:
+    runs-on: ubuntu-latest
+    outputs:
+      is-pr: ${{ steps.check.outputs.is-pr }}
+      pr-number: ${{ steps.check.outputs.pr-number }}
+    steps:
+      - name: Check if this is a PR
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.eventName === 'pull_request') {
+              core.setOutput('is-pr', 'true');
+              core.setOutput('pr-number', context.issue.number);
+            } else if (context.eventName === 'issue_comment') {
+              const { data: issue } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number
+              });
+              if (issue.pull_request) {
+                core.setOutput('is-pr', 'true');
+                core.setOutput('pr-number', context.issue.number);
+              } else {
+                core.setOutput('is-pr', 'false');
+              }
+            } else {
+              core.setOutput('is-pr', 'true'); // workflow_dispatch 也允许运行
+              core.setOutput('pr-number', '');
+            }
+
   dependency-check:
+    needs: check-if-pr
+    if: needs.check-if-pr.outputs.is-pr == 'true'
     name: OWASP Dependency Check
     runs-on: ubuntu-latest
     permissions:
       contents: read
       security-events: write
       pull-requests: write
+      actions: read
 
     steps:
       - name: Checkout code
@@ -33,7 +70,7 @@ jobs:
           fi
 
       - name: Check PR comments for skip keyword
-        if: github.event_name == 'pull_request' && steps.check-skip-file.outputs.skip == 'false'
+        if: steps.check-skip-file.outputs.skip == 'false'
         id: check-skip-comment
         uses: actions/github-script@v7
         with:
@@ -45,16 +82,35 @@ jobs:
               '[skip-dependency check]'
             ];
             
+            // 获取 PR 编号
+            let prNumber = context.issue.number;
+            if (context.eventName === 'issue_comment') {
+              prNumber = context.issue.number;
+            } else if (context.eventName === 'pull_request') {
+              prNumber = context.issue.number;
+            }
+            
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.issue.number
+              issue_number: prNumber
             });
             
-            const hasSkipKeyword = comments.some(comment => {
-              const body = comment.body.toLowerCase();
-              return skipKeywords.some(keyword => body.includes(keyword.toLowerCase()));
-            });
+            // 检查最新的评论（如果是 issue_comment 事件，检查触发事件的评论）
+            let hasSkipKeyword = false;
+            if (context.eventName === 'issue_comment') {
+              // 如果是评论事件，检查触发事件的评论
+              const triggerComment = context.payload.comment.body.toLowerCase();
+              hasSkipKeyword = skipKeywords.some(keyword => triggerComment.includes(keyword.toLowerCase()));
+            }
+            
+            // 也检查所有历史评论
+            if (!hasSkipKeyword) {
+              hasSkipKeyword = comments.some(comment => {
+                const body = comment.body.toLowerCase();
+                return skipKeywords.some(keyword => body.includes(keyword.toLowerCase()));
+              });
+            }
             
             if (hasSkipKeyword) {
               console.log('✅ 在 PR 评论中发现跳过检查关键字，将跳过依赖安全检查');
@@ -63,14 +119,43 @@ jobs:
               core.setOutput('skip', 'false');
             }
 
+      - name: Comment PR when skipped
+        if: (steps.check-skip-file.outputs.skip == 'true' || steps.check-skip-comment.outputs.skip == 'true') && github.event_name != 'workflow_dispatch'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let prNumber = context.issue.number;
+            
+            let skipReason = '';
+            if (fs.existsSync('.github/dependency-check-skip')) {
+              skipReason = '配置文件 (`.github/dependency-check-skip`)';
+            } else {
+              skipReason = 'PR 评论中的跳过关键字';
+            }
+            
+            const comment = `## ⏭️ 依赖安全检查已跳过\n\n` +
+              `依赖安全检查已跳过（通过 ${skipReason}）。\n\n` +
+              `✅ 状态检查将标记为成功，PR 可以合并。\n\n` +
+              `---\n\n` +
+              `> 💡 提示：如果后续有新的 commit，将重新执行依赖安全检查。`;
+            
+            await github.rest.issues.createComment({
+              issue_number: prNumber,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
       - name: Skip check if requested
-        if: steps.check-skip-file.outputs.skip == 'true' || (github.event_name == 'pull_request' && steps.check-skip-comment.outputs.skip == 'true')
+        if: steps.check-skip-file.outputs.skip == 'true' || steps.check-skip-comment.outputs.skip == 'true'
         run: |
           echo "⏭️ 跳过依赖安全检查（已通过配置文件或 PR 评论请求跳过）"
+          echo "✅ 检查已跳过，状态检查将标记为成功"
           exit 0
 
       - name: Set up JDK 17
-        if: steps.check-skip-file.outputs.skip != 'true' && (github.event_name != 'pull_request' || steps.check-skip-comment.outputs.skip != 'true')
+        if: steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -78,7 +163,7 @@ jobs:
           cache: 'maven'
 
       - name: Check for dependency updates
-        if: steps.check-skip-file.outputs.skip != 'true' && (github.event_name != 'pull_request' || steps.check-skip-comment.outputs.skip != 'true')
+        if: steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
         id: check-updates
         run: |
           echo "检查依赖更新..."
@@ -113,14 +198,14 @@ jobs:
         continue-on-error: true
 
       - name: Run OWASP Dependency-Check
-        if: steps.check-skip-file.outputs.skip != 'true' && (github.event_name != 'pull_request' || steps.check-skip-comment.outputs.skip != 'true')
+        if: steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
         id: dependency-check
         run: |
           echo "运行 OWASP Dependency-Check 安全扫描..."
           mvn verify -DskipTests
 
       - name: Upload dependency check reports
-        if: always() && steps.check-skip-file.outputs.skip != 'true' && (github.event_name != 'pull_request' || steps.check-skip-comment.outputs.skip != 'true')
+        if: always() && steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: dependency-check-reports
@@ -132,34 +217,50 @@ jobs:
           retention-days: 30
 
       - name: Comment PR with detailed summary
-        if: failure() && github.event_name == 'pull_request' && steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
+        if: failure() && steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const path = require('path');
             
-            // 获取 Actions 运行链接
+            // 获取 PR 编号
+            let prNumber = context.issue.number;
+            if (context.eventName === 'issue_comment') {
+              prNumber = context.issue.number;
+            } else if (context.eventName === 'pull_request') {
+              prNumber = context.issue.number;
+            }
+            
+            // 获取 Actions 运行链接和 Artifacts 链接
             const runId = context.runId;
             const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId}`;
-            const artifactsUrl = `${runUrl}#artifacts`;
+            const artifactsUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId}`;
+            
+            // 获取 Artifacts 信息（用于生成下载链接）
+            // 注意：GitHub Artifacts 需要通过 Actions 页面下载，无法直接生成下载链接
+            // 但可以提供 Artifacts 页面的链接
             
             let comment = '## 🔒 依赖安全检查失败\n\n';
             comment += '检测到高风险依赖漏洞（CVSS >= 7.0）。\n\n';
             comment += '### 📋 检查结果\n\n';
             comment += '- **状态**: ❌ 失败\n';
             comment += `- **Actions 运行**: [查看详情](${runUrl})\n`;
-            comment += `- **详细报告**: [下载 Artifacts](${artifactsUrl})\n\n`;
+            comment += `- **报告下载**: [下载 Artifacts（包含 HTML/JSON/TXT 报告）](${artifactsUrl})\n`;
+            comment += '  - 在 Actions 运行页面底部找到 "Artifacts" 部分\n';
+            comment += '  - 点击 "dependency-check-reports" 下载所有报告\n';
+            comment += '  - HTML 报告：`dependency-check-report.html`（推荐，可在浏览器中打开）\n';
+            comment += '  - JSON 报告：`dependency-check-report.json`\n';
+            comment += '  - 依赖更新：`dependency-updates.txt` 和 `dependency-updates.md`\n\n';
             comment += '---\n\n';
             
-            // 读取并解析 JSON 报告
+            // 读取并解析 JSON 报告（仅用于提取漏洞信息，不显示 JSON）
             let vulnerabilities = [];
-            let rawReportContent = '';
+            let txtReportContent = '';
             try {
               const reportPath = 'target/dependency-check-reports/dependency-check-report.json';
               if (fs.existsSync(reportPath)) {
                 const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
-                rawReportContent = JSON.stringify(report, null, 2);
                 
                 if (report.dependencies) {
                   vulnerabilities = report.dependencies
@@ -183,6 +284,19 @@ jobs:
                       return scoreB - scoreA;
                     });
                 }
+              }
+              
+              // 读取 HTML 报告并转换为文本格式（用于显示）
+              const htmlReportPath = 'target/dependency-check-reports/dependency-check-report.html';
+              if (fs.existsSync(htmlReportPath)) {
+                const htmlContent = fs.readFileSync(htmlReportPath, 'utf8');
+                // 简单提取文本内容（移除 HTML 标签）
+                txtReportContent = htmlContent
+                  .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                  .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                  .replace(/<[^>]+>/g, ' ')
+                  .replace(/\s+/g, ' ')
+                  .trim();
               }
             } catch (error) {
               console.log('无法解析报告文件:', error.message);
@@ -213,38 +327,54 @@ jobs:
             // 添加修复建议
             comment += '### 💡 修复建议\n\n';
             comment += '1. **更新依赖版本**：优先更新到最新版本（如果可用）\n';
-            comment += '2. **查看详细报告**：下载 Artifacts 中的 HTML 报告查看完整信息\n';
+            comment += '2. **查看详细报告**：下载 HTML 报告查看完整信息\n';
             comment += '3. **添加抑制规则**：如果漏洞可以接受，在 `dependency-check-suppression.xml` 中添加抑制规则\n';
-            comment += '4. **重新提交**：修复后重新提交 PR\n\n';
+            comment += '4. **跳过检查**：如果本次 PR 不涉及依赖变更，可以在 PR 中添加评论 `[skip-dependency-check]` 跳过检查\n';
+            comment += '5. **重新提交**：修复后重新提交 PR\n\n';
             comment += '---\n\n';
             
-            // 添加原始检查结果（Markdown 代码块）
-            comment += '### 📝 原始检查结果\n\n';
-            comment += '<details>\n<summary>点击展开查看原始 JSON 报告（前 1000 行）</summary>\n\n';
-            comment += '```json\n';
-            
-            // 限制输出长度，避免评论过长
-            const maxLines = 1000;
-            const lines = rawReportContent.split('\n');
-            const displayLines = lines.slice(0, maxLines);
-            comment += displayLines.join('\n');
-            
-            if (lines.length > maxLines) {
-              comment += `\n\n... (还有 ${lines.length - maxLines} 行，请下载完整报告查看)\n`;
+            // 添加原始检查结果（TXT 格式，可折叠）
+            if (txtReportContent) {
+              comment += '### 📝 原始检查结果（文本格式）\n\n';
+              comment += '<details>\n<summary>点击展开查看原始文本报告（前 2000 字符）</summary>\n\n';
+              comment += '```\n';
+              
+              // 限制输出长度
+              const maxChars = 2000;
+              const displayContent = txtReportContent.length > maxChars 
+                ? txtReportContent.substring(0, maxChars) + `\n\n... (还有 ${txtReportContent.length - maxChars} 个字符，请下载完整报告查看)`
+                : txtReportContent;
+              
+              comment += displayContent;
+              comment += '\n```\n';
+              comment += '</details>\n\n';
             }
             
-            comment += '\n```\n';
-            comment += '</details>\n';
-            
-            // 添加依赖更新信息（如果有）
+            // 添加依赖更新信息（如果有，也放到可折叠区域）
             try {
-              const updatesPath = 'target/dependency-updates.md';
+              const updatesPath = 'target/dependency-updates.txt';
               if (fs.existsSync(updatesPath)) {
                 const updatesContent = fs.readFileSync(updatesPath, 'utf8');
                 if (updatesContent.trim()) {
-                  comment += '\n---\n\n';
+                  comment += '---\n\n';
                   comment += '### 📦 依赖更新检查结果\n\n';
-                  comment += updatesContent;
+                  comment += '<details>\n<summary>点击展开查看依赖更新详情</summary>\n\n';
+                  
+                  // 读取 Markdown 格式的更新报告
+                  const updatesMdPath = 'target/dependency-updates.md';
+                  if (fs.existsSync(updatesMdPath)) {
+                    const mdContent = fs.readFileSync(updatesMdPath, 'utf8');
+                    comment += mdContent;
+                  } else {
+                    comment += '```\n';
+                    comment += updatesContent.substring(0, 2000);
+                    if (updatesContent.length > 2000) {
+                      comment += `\n\n... (还有 ${updatesContent.length - 2000} 个字符)`;
+                    }
+                    comment += '\n```\n';
+                  }
+                  
+                  comment += '</details>\n';
                 }
               }
             } catch (error) {
@@ -253,7 +383,7 @@ jobs:
             
             // 发送评论
             await github.rest.issues.createComment({
-              issue_number: context.issue.number,
+              issue_number: prNumber,
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: comment
@@ -262,17 +392,25 @@ jobs:
       - name: Check scan result
         if: always()
         run: |
+          # 如果跳过了检查，直接成功退出
           if [ "${{ steps.check-skip-file.outputs.skip }}" == "true" ] || [ "${{ steps.check-skip-comment.outputs.skip }}" == "true" ]; then
-            echo "✅ 已跳过依赖安全检查"
+            echo "✅ 已跳过依赖安全检查（通过配置文件或 PR 评论请求）"
+            echo "状态检查将标记为成功，PR 可以合并"
             exit 0
-          elif [ "${{ steps.dependency-check.outcome }}" == "failure" ]; then
+          fi
+          
+          # 检查实际的检查结果
+          if [ "${{ steps.dependency-check.outcome }}" == "failure" ]; then
             echo "❌ 发现高风险依赖漏洞，PR 无法合并"
-            echo "请修复漏洞后重新提交"
+            echo "请修复漏洞后重新提交，或在 PR 中添加评论 [skip-dependency-check] 跳过检查"
             exit 1
           elif [ "${{ steps.dependency-check.outcome }}" == "success" ]; then
             echo "✅ 依赖安全检查通过"
             exit 0
+          elif [ "${{ steps.dependency-check.outcome }}" == "skipped" ]; then
+            echo "⚠️ 依赖检查步骤被跳过"
+            exit 0
           else
-            echo "⚠️ 检查状态: ${{ steps.dependency-check.outcome }}"
+            echo "⚠️ 检查状态未知: ${{ steps.dependency-check.outcome }}"
             exit 1
           fi

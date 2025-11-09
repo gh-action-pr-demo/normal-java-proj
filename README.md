@@ -2,6 +2,10 @@
 
 这是一个演示项目，展示如何使用 OWASP Dependency-Check 和 GitHub Actions 在 PR 时自动检查依赖安全漏洞。
 
+## 📚 完整配置指南
+
+**👉 [查看完整配置指南](.github/DEPENDENCY_CHECK_SETUP.md)** - 包含所有配置步骤、预期效果和常见问题解答
+
 ## 功能特性
 
 - ✅ 自动依赖安全扫描（OWASP Dependency-Check）
@@ -10,6 +14,8 @@
 - ✅ 依赖版本更新检查（versions-maven-plugin）
 - ✅ 详细的 HTML 和 JSON 报告
 - ✅ 支持组织级集中配置（可重用 workflow）
+- ✅ **跳过检查功能**：支持通过配置文件或 PR 评论跳过检查
+- ✅ **优化的 PR 评论**：失败时自动添加详细结果和链接
 
 ## 项目结构
 
@@ -152,6 +158,8 @@ jobs:
 
 **解决方案**：必须配置分支保护规则，将 Actions 状态检查设置为必需检查。
 
+> **📖 详细配置步骤**：请参考 [完整配置指南](.github/DEPENDENCY_CHECK_SETUP.md) 中的"详细配置步骤"章节
+
 ### 快速配置步骤
 
 1. 进入 **Settings → Branches**
@@ -185,6 +193,43 @@ jobs:
 - ✅ **所有检查通过后**：**Merge pull request** 按钮才会变为可点击状态
 
 如果不符合上述行为，请参考 [详细配置指南](.github/BRANCH_PROTECTION_SETUP.md) 进行故障排除。
+
+## 高级功能
+
+### 跳过检查功能
+
+在某些情况下，你可能需要跳过依赖安全检查。支持两种方式：
+
+#### 方式 1：配置文件控制
+
+在项目根目录创建 `.github/dependency-check-skip` 文件：
+
+```bash
+touch .github/dependency-check-skip
+```
+
+如果此文件存在，workflow 会自动跳过检查并标记为成功。
+
+#### 方式 2：PR 评论控制
+
+在 PR 中添加评论，包含以下关键字之一：
+
+- `[skip dependency check]`
+- `[skip-dependency-check]`
+- `[skip dependency-check]`
+- `[skip-dependency check]`
+
+**示例评论**：
+```
+[skip dependency check] 本次 PR 不涉及依赖变更，跳过检查
+```
+
+**注意**：
+- 关键字不区分大小写
+- 必须由具有写权限的用户评论
+- 评论后需要重新触发 workflow（推送新提交或手动触发）
+
+> **📖 更多高级功能**：请参考 [完整配置指南](.github/DEPENDENCY_CHECK_SETUP.md) 中的"高级功能"章节
 
 ## GitHub Actions 被禁用时的解决方案
 

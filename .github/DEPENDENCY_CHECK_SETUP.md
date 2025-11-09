@@ -308,7 +308,27 @@ touch .github/dependency-check-skip
 - 依赖更新检查结果已优化为 Markdown 表格格式
 - 安全检查结果以 Markdown 表格和代码块格式展示
 
-### Q6: 如何查看详细的检查报告？
+### Q6: 为什么显示 "Expected — Waiting for status to be reported"？
+
+**A:** 这个提示表示分支保护规则中配置了必需的状态检查，但该检查还没有报告状态。
+
+**原因**：
+- 分支保护规则中配置了 `Dependency Security Check / OWASP Dependency Check` 作为必需检查
+- 当跳过检查时，如果状态检查没有正确报告，就会一直显示 pending
+
+**解决方案**：
+- 确保 workflow 正确配置了状态检查报告
+- 当跳过检查时，workflow 会自动报告状态检查为成功
+- 如果仍然显示 pending，请检查：
+  1. 确保 workflow 文件位于 `.github/workflows/` 目录
+  2. 确保 workflow 有 `statuses: write` 权限
+  3. 确保状态检查名称完全匹配：`Dependency Security Check / OWASP Dependency Check`
+
+**注意**：
+- `check-if-pr` job 的状态检查是正常的，这是 workflow 的内部检查
+- 只有 `OWASP Dependency Check` job 的状态检查是分支保护规则中配置的必需检查
+
+### Q7: 如何查看详细的检查报告？
 
 **A:** 
 1. 在 PR 页面的 Actions 运行结果中下载 Artifacts

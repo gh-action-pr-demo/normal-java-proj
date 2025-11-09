@@ -40,6 +40,13 @@ jobs:
               });
               
               if (issue.pull_request) {
+                // 获取 PR 信息以获取 head SHA
+                const { data: pr } = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: context.issue.number
+                });
+                
                 // 检查评论中是否包含 skip 关键字
                 const skipKeywords = [
                   '[skip dependency check]',
@@ -57,7 +64,9 @@ jobs:
                   core.setOutput('is-pr', 'true');
                   core.setOutput('pr-number', context.issue.number);
                   core.setOutput('should-trigger', 'true');
+                  core.setOutput('pr-head-sha', pr.head.sha);
                   console.log('✅ 检测到跳过检查关键字，将触发 workflow');
+                  console.log(`PR head SHA: ${pr.head.sha}`);
                 } else {
                   core.setOutput('is-pr', 'false');
                   core.setOutput('should-trigger', 'false');
@@ -84,12 +93,28 @@ jobs:
       pull-requests: write
       actions: read
       issues: write
+      statuses: write
 
     steps:
+      - name: Get PR head SHA for issue_comment event
+        if: github.event_name == 'issue_comment'
+        id: get-pr-sha
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            core.setOutput('pr-head-sha', pr.head.sha);
+            console.log(`PR head SHA: ${pr.head.sha}`);
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # 需要完整历史记录来检查 PR 评论
+          ref: ${{ github.event_name == 'issue_comment' && steps.get-pr-sha.outputs.pr-head-sha || github.event.pull_request.head.sha || github.sha }}
 
       - name: Check if skip file exists
         id: check-skip-file
@@ -422,28 +447,106 @@ jobs:
               body: comment
             });
 
+      - name: Report status check result
+        if: always()
+        env:
+          SKIP_FILE: ${{ steps.check-skip-file.outputs.skip }}
+          SKIP_COMMENT: ${{ steps.check-skip-comment.outputs.skip }}
+          CHECK_OUTCOME: ${{ steps.dependency-check.outcome }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            // 检查是否跳过了检查
+            const skipFile = process.env.SKIP_FILE === 'true';
+            const skipComment = process.env.SKIP_COMMENT === 'true';
+            const skipped = skipFile || skipComment;
+            
+            // 获取 PR 编号和 SHA
+            let prNumber = context.issue.number;
+            let sha = context.sha;
+            
+            if (context.eventName === 'issue_comment') {
+              prNumber = context.issue.number;
+              // 获取 PR 的 head SHA
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: prNumber
+              });
+              sha = pr.head.sha;
+            } else if (context.eventName === 'pull_request') {
+              sha = context.payload.pull_request.head.sha;
+            }
+            
+            if (skipped) {
+              // 跳过检查时，报告成功状态
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: sha,
+                state: 'success',
+                context: 'Dependency Security Check / OWASP Dependency Check',
+                description: '依赖安全检查已跳过（通过配置文件或 PR 评论请求）',
+                target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+              });
+              console.log('✅ 状态检查已报告为成功（跳过检查）');
+            } else {
+              // 检查实际的检查结果
+              const checkOutcome = process.env.CHECK_OUTCOME || 'unknown';
+              
+              if (checkOutcome === 'failure') {
+                await github.rest.repos.createCommitStatus({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  sha: sha,
+                  state: 'failure',
+                  context: 'Dependency Security Check / OWASP Dependency Check',
+                  description: '发现高风险依赖漏洞',
+                  target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+                });
+                console.log('❌ 状态检查已报告为失败');
+              } else if (checkOutcome === 'success') {
+                await github.rest.repos.createCommitStatus({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  sha: sha,
+                  state: 'success',
+                  context: 'Dependency Security Check / OWASP Dependency Check',
+                  description: '依赖安全检查通过',
+                  target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+                });
+                console.log('✅ 状态检查已报告为成功');
+              }
+            }
+
       - name: Check scan result
         if: always()
+        env:
+          SKIP_FILE: ${{ steps.check-skip-file.outputs.skip }}
+          SKIP_COMMENT: ${{ steps.check-skip-comment.outputs.skip }}
+          CHECK_OUTCOME: ${{ steps.dependency-check.outcome }}
         run: |
           # 如果跳过了检查，直接成功退出
-          if [ "${{ steps.check-skip-file.outputs.skip }}" == "true" ] || [ "${{ steps.check-skip-comment.outputs.skip }}" == "true" ]; then
+          if [ "$SKIP_FILE" == "true" ] || [ "$SKIP_COMMENT" == "true" ]; then
             echo "✅ 已跳过依赖安全检查（通过配置文件或 PR 评论请求）"
             echo "状态检查将标记为成功，PR 可以合并"
             exit 0
           fi
           
           # 检查实际的检查结果
-          if [ "${{ steps.dependency-check.outcome }}" == "failure" ]; then
+          if [ "$CHECK_OUTCOME" == "failure" ]; then
             echo "❌ 发现高风险依赖漏洞，PR 无法合并"
             echo "请修复漏洞后重新提交，或在 PR 中添加评论 [skip-dependency-check] 跳过检查"
             exit 1
-          elif [ "${{ steps.dependency-check.outcome }}" == "success" ]; then
+          elif [ "$CHECK_OUTCOME" == "success" ]; then
             echo "✅ 依赖安全检查通过"
             exit 0
-          elif [ "${{ steps.dependency-check.outcome }}" == "skipped" ]; then
+          elif [ "$CHECK_OUTCOME" == "skipped" ]; then
             echo "⚠️ 依赖检查步骤被跳过"
             exit 0
           else
-            echo "⚠️ 检查状态未知: ${{ steps.dependency-check.outcome }}"
+            echo "⚠️ 检查状态未知: $CHECK_OUTCOME"
             exit 1
           fi

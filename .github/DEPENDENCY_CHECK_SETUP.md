@@ -219,12 +219,21 @@ touch .github/dependency-check-skip
   - 如果后续有新的评论（包含 skip 关键字），会再次触发并跳过检查
 
 **重要提示**：
+- ⚠️ **GitHub Actions 限制**：`issue_comment` 事件**只有在 workflow 文件位于默认分支（main/master）时才会触发**
+  - 这是 GitHub Actions 的安全限制，无法绕过
+  - **解决方案**：
+    1. **推荐方案**：将 `.github/workflows/dependency-check.yml` 文件合并到默认分支
+    2. **工作原理**：虽然 workflow 文件在默认分支，但会 checkout PR 分支的代码进行检查
+    3. **效果**：可以在 PR 分支上通过评论触发检查，检查的是 PR 分支的代码
+  - **如果 workflow 文件在 PR 分支上**：评论触发功能无法工作，必须先合并到默认分支
 - 确保 workflow 文件位于 `.github/workflows/` 目录下
 - 确保仓库的 Actions 权限已启用
 - 如果评论后没有触发 workflow，请检查：
-  1. 仓库 Settings → Actions → General → 确保 "Allow all actions and reusable workflows" 已启用
-  2. 确保评论是在 PR 上，而不是在普通的 Issue 上
-  3. 可以尝试手动触发：Actions → Dependency Security Check → Run workflow
+  1. **首先确认**：workflow 文件是否在默认分支上（这是最常见的原因）
+  2. 仓库 Settings → Actions → General → 确保 "Allow all actions and reusable workflows" 已启用
+  3. 确保评论是在 PR 上，而不是在普通的 Issue 上
+  4. 检查 Actions 日志：如果 workflow 被触发了但没有运行，查看日志中的调试信息
+  5. 可以尝试手动触发：Actions → Dependency Security Check → Run workflow
 
 **工作流程说明**：
 1. **添加 `[skip-dependency-check]` 评论**：
@@ -305,15 +314,40 @@ touch .github/dependency-check-skip
 3. 在 PR 页面的 "Checks" 部分查看完整的状态检查名称
 4. 复制这个确切的名称到分支保护规则中
 
-### Q3: 可以跳过检查吗？
+### Q3: 添加 `[skip-dependency-check]` 评论后，为什么没有触发 workflow？
+
+**A:** 这是最常见的问题，主要原因和解决方法：
+
+1. **⚠️ workflow 文件不在默认分支**
+   - `issue_comment` 事件**只有在 workflow 文件位于默认分支（main/master）时才会触发**
+   - **解决方法**：确保 `.github/workflows/dependency-check.yml` 文件已合并到默认分支
+   - 如果文件在 PR 分支上，必须先合并到默认分支
+
+2. **检查 workflow 是否被触发**
+   - 前往 Actions 页面查看是否有新的 workflow 运行
+   - 如果没有任何运行记录，说明 workflow 没有被触发（通常是上述原因）
+   - 如果有运行记录但 job 被跳过，查看日志中的调试信息
+
+3. **其他可能的原因**
+   - 仓库 Actions 权限未启用
+   - 评论不是在 PR 上，而是在普通 Issue 上
+   - 评论内容不包含正确的关键字（注意大小写和格式）
+
+**调试步骤**：
+1. 确认 workflow 文件在默认分支上
+2. 在 PR 上添加评论：`[skip-dependency-check]`
+3. 前往 Actions 页面查看是否有新的运行
+4. 如果有运行，查看 `check-if-pr` job 的日志，会显示详细的调试信息
+
+### Q4: 可以跳过检查吗？
 
 **A:** 可以，支持两种方式：
 1. 创建 `.github/dependency-check-skip` 文件
-2. 在 PR 中添加评论：`[skip dependency check]`
+2. 在 PR 中添加评论：`[skip dependency check]`（需要 workflow 文件在默认分支）
 
 详见 [跳过检查功能](#1-跳过检查功能)
 
-### Q4: 如何修改 CVSS 阈值？
+### Q5: 如何修改 CVSS 阈值？
 
 **A:** 在 `pom.xml` 中修改 `failBuildOnCVSS` 配置：
 
@@ -321,7 +355,7 @@ touch .github/dependency-check-skip
 <failBuildOnCVSS>7.0</failBuildOnCVSS>  <!-- 修改为你需要的阈值 -->
 ```
 
-### Q5: GitHub 评论区可以渲染 HTML 吗？
+### Q6: GitHub 评论区可以渲染 HTML 吗？
 
 **A:** GitHub 的 PR 评论不支持直接渲染 HTML，但支持：
 - Markdown 格式（表格、代码块、链接等）

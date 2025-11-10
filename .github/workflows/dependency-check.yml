@@ -6,7 +6,7 @@ on:
       - main
       - master
   issue_comment:
-    types: [created]
+    types: [created, edited]
   workflow_dispatch:
 
 # 确保 workflow 有权限读取和写入
@@ -38,12 +38,18 @@ jobs:
               core.setOutput('pr-number', context.issue.number);
               core.setOutput('should-trigger', 'true');
             } else if (context.eventName === 'issue_comment') {
+              console.log('📝 检测到 issue_comment 事件');
+              console.log(`评论内容: ${context.payload.comment.body}`);
+              console.log(`Issue 编号: ${context.issue.number}`);
+              
               // 检查是否是 PR 的评论
               const { data: issue } = await github.rest.issues.get({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: context.issue.number
               });
+              
+              console.log(`是否为 PR: ${!!issue.pull_request}`);
               
               if (issue.pull_request) {
                 // 获取 PR 信息以获取 head SHA
@@ -52,6 +58,8 @@ jobs:
                   repo: context.repo.repo,
                   pull_number: context.issue.number
                 });
+                
+                console.log(`PR head SHA: ${pr.head.sha}`);
                 
                 // 检查评论中是否包含 skip 关键字
                 const skipKeywords = [
@@ -62,9 +70,17 @@ jobs:
                 ];
                 
                 const commentBody = context.payload.comment.body.toLowerCase();
-                const hasSkipKeyword = skipKeywords.some(keyword => 
-                  commentBody.includes(keyword.toLowerCase())
-                );
+                console.log(`评论内容（小写）: ${commentBody}`);
+                
+                const hasSkipKeyword = skipKeywords.some(keyword => {
+                  const found = commentBody.includes(keyword.toLowerCase());
+                  if (found) {
+                    console.log(`✅ 找到关键字: ${keyword}`);
+                  }
+                  return found;
+                });
+                
+                console.log(`是否包含 skip 关键字: ${hasSkipKeyword}`);
                 
                 // 只有包含 skip 关键字的评论才触发 workflow
                 if (hasSkipKeyword) {
@@ -79,6 +95,7 @@ jobs:
                   console.log('ℹ️ 评论中未包含跳过检查关键字，不触发 workflow');
                 }
               } else {
+                console.log('ℹ️ 这不是 PR 的评论，跳过');
                 core.setOutput('is-pr', 'false');
                 core.setOutput('should-trigger', 'false');
               }
@@ -120,7 +137,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # 需要完整历史记录来检查 PR 评论
+          # 对于 issue_comment 事件，checkout PR 分支的代码
+          # 对于 pull_request 事件，checkout PR 分支的代码
+          # 对于其他事件，checkout 当前分支
           ref: ${{ github.event_name == 'issue_comment' && steps.get-pr-sha.outputs.pr-head-sha || github.event.pull_request.head.sha || github.sha }}
+          # 确保能够访问 PR 分支
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Check if skip file exists
         id: check-skip-file

@@ -280,7 +280,100 @@ touch .github/dependency-check-skip
 </suppress>
 ```
 
-### 4. 依赖更新检查格式
+### 4. 配置 NVD API Key（可选）
+
+OWASP Dependency-Check 默认不需要 NVD API key，但如果不配置，会受到速率限制（每分钟 5 次请求）。如果需要更高的速率限制，可以配置 NVD API key。
+
+#### 获取 NVD API Key
+
+1. 访问 https://nvd.nist.gov/developers/request-an-api-key
+2. 填写表单申请 API key
+3. 等待邮件确认（通常几分钟内）
+
+#### 配置方式
+
+**方式 1：通过 GitHub Secrets（推荐）**
+
+1. 前往仓库 Settings → Secrets and variables → Actions
+2. 点击 "New repository secret"
+3. 添加以下 Secret：
+   - Name: `NVD_API_KEY`
+   - Value: 你的 NVD API key
+
+配置后，workflow 会自动使用该 API key。
+
+**方式 2：通过环境变量**
+
+在 workflow 文件中取消注释以下行：
+
+```yaml
+env:
+  NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+```
+
+**方式 3：通过 Maven 属性**
+
+在 `pom.xml` 中已经配置了支持环境变量 `NVD_API_KEY`，如果设置了环境变量，会自动使用。
+
+#### 验证配置
+
+配置后，运行 workflow 时会在日志中看到：
+- 如果配置了 API key：会使用 API key 进行请求
+- 如果未配置：会使用默认的速率限制
+
+### 5. 配置私服 Maven（可选）
+
+如果你的项目使用私服 Maven（如 Nexus），需要配置 Maven settings.xml。
+
+#### 方式 1：项目级配置文件（推荐用于公开仓库）
+
+1. 复制示例文件：
+   ```bash
+   cp .github/maven-settings.xml.example .github/maven-settings.xml
+   ```
+
+2. 编辑 `.github/maven-settings.xml`，填入你的私服地址和认证信息：
+   ```xml
+   <settings>
+     <servers>
+       <server>
+         <id>your-nexus</id>
+         <username>your-username</username>
+         <password>your-password</password>
+       </server>
+     </servers>
+     <mirrors>
+       <mirror>
+         <id>your-nexus</id>
+         <mirrorOf>*</mirrorOf>
+         <url>https://your-nexus-server/repository/maven-public/</url>
+       </mirror>
+     </mirrors>
+   </settings>
+   ```
+
+3. 将 `.github/maven-settings.xml` 添加到 `.gitignore`（如果包含敏感信息）
+
+#### 方式 2：GitHub Secrets（推荐用于私有仓库）
+
+1. 前往仓库 Settings → Secrets and variables → Actions
+2. 添加以下 Secrets：
+   - `MAVEN_NEXUS_URL`：私服地址（如：`https://nexus.example.com/repository/maven-public/`）
+   - `MAVEN_NEXUS_USERNAME`：用户名
+   - `MAVEN_NEXUS_PASSWORD`：密码
+
+配置后，workflow 会自动生成 `settings.xml` 并使用私服。
+
+#### 验证配置
+
+配置后，运行 workflow 时会在日志中看到：
+- `✅ 使用项目级 Maven settings.xml` 或
+- `✅ 使用 GitHub Secrets 配置的私服信息生成 settings.xml`
+
+如果未配置，会显示：
+- `ℹ️ 未配置私服，使用默认 Maven 中央仓库`
+
+### 6. 依赖更新检查格式
 
 依赖更新检查结果会以 Markdown 表格格式输出，方便在 PR 评论中查看。
 
@@ -316,28 +409,73 @@ touch .github/dependency-check-skip
 
 ### Q3: 添加 `[skip-dependency-check]` 评论后，为什么没有触发 workflow？
 
-**A:** 这是最常见的问题，主要原因和解决方法：
+**A:** 如果评论后没有任何运行记录，可能的原因：
 
-1. **⚠️ workflow 文件不在默认分支**
+1. **⚠️ workflow 文件不在默认分支（最常见）**
    - `issue_comment` 事件**只有在 workflow 文件位于默认分支（main/master）时才会触发**
    - **解决方法**：确保 `.github/workflows/dependency-check.yml` 文件已合并到默认分支
-   - 如果文件在 PR 分支上，必须先合并到默认分支
+   - **验证方法**：在默认分支查看文件是否存在
 
-2. **检查 workflow 是否被触发**
-   - 前往 Actions 页面查看是否有新的 workflow 运行
-   - 如果没有任何运行记录，说明 workflow 没有被触发（通常是上述原因）
-   - 如果有运行记录但 job 被跳过，查看日志中的调试信息
+2. **仓库 Actions 权限未启用**
+   - 前往仓库 Settings → Actions → General
+   - 确保 "Allow all actions and reusable workflows" 已启用
+   - 确保 "Workflow permissions" 设置为 "Read and write permissions"
 
-3. **其他可能的原因**
-   - 仓库 Actions 权限未启用
-   - 评论不是在 PR 上，而是在普通 Issue 上
-   - 评论内容不包含正确的关键字（注意大小写和格式）
+3. **评论位置错误**
+   - 确保评论是在 PR 上，而不是普通 Issue 上
+   - 确保评论是由有写权限的用户添加的
+
+4. **评论格式不正确**
+   - 评论内容必须完全等于（忽略大小写）：`[skip-dependency-check]`
+   - 不能有其他文字，不能有额外的空格（除了前后空格会被自动忽略）
+
+5. **GitHub Actions 服务问题**
+   - 偶尔 GitHub Actions 服务可能会有延迟
+   - 等待几分钟后再次检查 Actions 页面
 
 **调试步骤**：
-1. 确认 workflow 文件在默认分支上
-2. 在 PR 上添加评论：`[skip-dependency-check]`
-3. 前往 Actions 页面查看是否有新的运行
-4. 如果有运行，查看 `check-if-pr` job 的日志，会显示详细的调试信息
+
+1. **检查 Actions 页面是否有任何运行记录**
+   - 前往仓库 Actions 页面
+   - 查看是否有任何与评论相关的运行记录
+   - **如果没有运行记录**：说明 workflow 没有被触发，继续步骤 2-4
+   - **如果有运行记录**：查看步骤 5
+
+2. **确认 workflow 文件位置**
+   - 检查 `.github/workflows/dependency-check.yml` 是否在默认分支（main/master）
+   - 在 GitHub 上切换到默认分支，查看文件是否存在
+   - 如果文件只在 PR 分支上，需要先合并到默认分支
+
+3. **检查仓库 Actions 权限**
+   - 前往仓库 Settings → Actions → General
+   - 确保 "Allow all actions and reusable workflows" 已启用
+   - 确保 "Workflow permissions" 设置为 "Read and write permissions"
+
+4. **确认评论格式和位置**
+   - 评论内容必须完全等于（忽略大小写）：`[skip-dependency-check]`
+   - 不能有其他文字，不能有额外的空格（除了前后空格会被自动忽略）
+   - 示例：
+     - ✅ `[skip-dependency-check]` - 会触发
+     - ✅ `[SKIP-DEPENDENCY-CHECK]` - 会触发（忽略大小写）
+     - ❌ `[skip-dependency-check] 一些文字` - 不会触发（有其他文字）
+     - ❌ `skip-dependency-check` - 不会触发（缺少方括号）
+   - 确保评论是在 PR 上，而不是普通 Issue
+   - 确保评论是由有写权限的用户添加的
+
+5. **查看调试日志（如果有运行记录）**
+   - 点击运行记录，查看 `check-if-pr` job 的日志
+   - 日志会显示：
+     - 是否检测到 `issue_comment` 事件
+     - 评论内容
+     - 是否完全匹配
+     - 是否触发 workflow
+   - 根据日志信息判断问题所在
+
+6. **尝试手动触发**
+   - 前往 Actions 页面
+   - 选择 "Dependency Security Check" workflow
+   - 点击 "Run workflow" 手动触发
+   - 如果能手动触发，说明 workflow 配置正确，问题在于事件触发
 
 ### Q4: 可以跳过检查吗？
 

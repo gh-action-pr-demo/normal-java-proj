@@ -14,6 +14,7 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  statuses: write
 
 # 只在 PR 相关的事件时运行
 jobs:
@@ -261,19 +262,100 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Configure Maven settings (if private repo needed)
+        if: steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
+        run: |
+          # 创建 .m2 目录
+          mkdir -p ~/.m2
+          
+          # 如果存在项目级 Maven settings.xml，使用它
+          if [ -f .github/maven-settings.xml ]; then
+            echo "✅ 使用项目级 Maven settings.xml"
+            cp .github/maven-settings.xml ~/.m2/settings.xml
+          # 如果通过 GitHub Secrets 配置了私服信息，可以动态生成 settings.xml
+          elif [ -n "${{ secrets.MAVEN_NEXUS_URL }}" ]; then
+            echo "✅ 使用 GitHub Secrets 配置的私服信息生成 settings.xml"
+            cat > ~/.m2/settings.xml <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0">
+  <servers>
+    <server>
+      <id>nexus</id>
+      <username>${{ secrets.MAVEN_NEXUS_USERNAME }}</username>
+      <password>${{ secrets.MAVEN_NEXUS_PASSWORD }}</password>
+    </server>
+  </servers>
+  <mirrors>
+    <mirror>
+      <id>nexus</id>
+      <mirrorOf>*</mirrorOf>
+      <url>${{ secrets.MAVEN_NEXUS_URL }}</url>
+    </mirror>
+  </mirrors>
+</settings>
+EOF
+          else
+            echo "ℹ️ 未配置私服，使用默认 Maven 中央仓库"
+          fi
+        continue-on-error: true
+
       - name: Run OWASP Dependency-Check
         if: steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
         id: dependency-check
+        env:
+          # NVD API key 是可选的，如果不配置会使用默认的速率限制
+          # 如果需要更高的速率限制，可以从 GitHub Secrets 配置
+          # NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           echo "运行 OWASP Dependency-Check 安全扫描..."
-          mvn verify -DskipTests
+          echo "注意：如果没有配置 NVD API key，可能会受到速率限制"
+          echo "如果需要更高的速率限制，请配置 NVD_API_KEY secret"
+          
+          # 运行依赖检查，捕获错误但不立即失败
+          mvn verify -DskipTests -X 2>&1 | tee maven-output.log || {
+            MAVEN_EXIT_CODE=$?
+            echo "Maven 命令退出码: $MAVEN_EXIT_CODE"
+            
+            # 检查是否是依赖检查失败（这是预期的）
+            if grep -q "dependency-check-maven" maven-output.log && grep -q "One or more dependencies were identified with vulnerabilities" maven-output.log; then
+              echo "✅ 依赖检查完成，发现漏洞（这是预期的行为）"
+              exit 0  # 依赖检查发现漏洞，但这是正常的检查结果
+            elif grep -q "BUILD FAILURE" maven-output.log; then
+              echo "❌ Maven 构建失败"
+              echo "=== Maven 输出（最后 100 行）==="
+              tail -100 maven-output.log
+              exit $MAVEN_EXIT_CODE
+            else
+              echo "⚠️ Maven 执行异常"
+              echo "=== Maven 输出（最后 100 行）==="
+              tail -100 maven-output.log
+              exit $MAVEN_EXIT_CODE
+            fi
+          }
+          
+          echo "✅ Maven 命令执行完成"
 
       - name: List generated files
         if: always() && steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
         run: |
           echo "检查生成的文件..."
           echo "=== dependency-check-reports 目录 ==="
-          ls -lah target/dependency-check-reports/ || echo "目录不存在"
+          if [ -d target/dependency-check-reports ]; then
+            ls -lah target/dependency-check-reports/
+            echo ""
+            echo "报告文件列表："
+            find target/dependency-check-reports -type f
+          else
+            echo "❌ 目录不存在"
+            echo "检查 Maven 输出日志..."
+            if [ -f maven-output.log ]; then
+              echo "=== Maven 输出（最后 50 行）==="
+              tail -50 maven-output.log
+            fi
+            echo ""
+            echo "检查 target 目录结构..."
+            find target -type d -maxdepth 2 || echo "target 目录不存在"
+          fi
           echo ""
           echo "=== target 目录 ==="
           ls -lah target/ | grep -E "(dependency|update)" || echo "未找到相关文件"

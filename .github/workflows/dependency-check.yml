@@ -223,7 +223,7 @@ jobs:
             echo "依赖更新信息已保存到 target/dependency-updates.txt"
             
             # 解析并生成更有用的 Markdown 报告
-            python3 << 'PYTHON_SCRIPT'
+            python3 > target/dependency-updates.md << 'EOF'
 import re
 import sys
 
@@ -380,8 +380,7 @@ except Exception as e:
     except:
         print("无法读取文件")
     print("```")
-PYTHON_SCRIPT
-            ) > target/dependency-updates.md
+EOF
             
             echo "✅ 已生成优化的依赖更新报告：target/dependency-updates.md"
           else

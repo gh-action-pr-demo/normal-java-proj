@@ -2,9 +2,7 @@ name: Dependency Security Check
 
 on:
   pull_request:
-    branches:
-      - main
-      - master
+    # 不指定 branches，表示所有 PR 都会触发（任意目标分支）
   issue_comment:
     types: [created, edited]
   workflow_dispatch:

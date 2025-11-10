@@ -216,33 +216,176 @@ jobs:
         id: check-updates
         run: |
           echo "检查依赖更新..."
+          mkdir -p target
           mvn versions:display-dependency-updates -DoutputFile=target/dependency-updates.txt || true
-          if [ -f target/dependency-updates.txt ]; then
+          
+          if [ -f target/dependency-updates.txt ] && [ -s target/dependency-updates.txt ]; then
             echo "依赖更新信息已保存到 target/dependency-updates.txt"
-            # 转换为 Markdown 格式
-            if [ -s target/dependency-updates.txt ]; then
-              {
-                echo "## 依赖更新检查结果"
-                echo ""
-                echo "### 原始输出"
-                echo ""
-                echo "\`\`\`"
-                cat target/dependency-updates.txt
-                echo "\`\`\`"
-                echo ""
-                echo "### 更新摘要（表格格式）"
-                echo ""
-                echo "| 依赖坐标 | 当前版本 | 最新版本 |"
-                echo "|----------|----------|----------|"
-                # 解析 Maven versions 插件输出格式: [INFO]   groupId:artifactId:type:currentVersion -> newVersion
-                grep -E "^\[INFO\].*->" target/dependency-updates.txt | \
-                  sed 's/\[INFO\]\s*//' | \
-                  sed -E 's/^([^:]+:[^:]+:[^:]+):([0-9.]+) -> ([0-9.]+).*/\1 | \2 | \3 |/' | \
-                  sed 's/|/|/g' || echo "| 无可用更新 | - | - |"
-                echo ""
-                echo "> 💡 提示：建议定期更新依赖以获取安全修复和新功能"
-              } > target/dependency-updates.md
-            fi
+            
+            # 解析并生成更有用的 Markdown 报告
+            python3 << 'PYTHON_SCRIPT'
+import re
+import sys
+
+def parse_version(version_str):
+    """解析版本号，返回 (major, minor, patch)"""
+    if not version_str:
+        return (0, 0, 0)
+    # 移除非数字字符，只保留版本号部分
+    version_str = re.sub(r'[^0-9.]', '', version_str.split()[0] if ' ' in version_str else version_str)
+    parts = version_str.split('.')
+    major = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
+    minor = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    patch = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+    return (major, minor, patch)
+
+def classify_update(current, latest):
+    """分类更新类型"""
+    cv = parse_version(current)
+    lv = parse_version(latest)
+    
+    if lv[0] > cv[0]:
+        return 'Major'
+    elif lv[1] > cv[1]:
+        return 'Minor'
+    elif lv[2] > cv[2]:
+        return 'Patch'
+    return 'Unknown'
+
+try:
+    with open('target/dependency-updates.txt', 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    # 提取更新信息：格式通常是 groupId:artifactId:type:currentVersion -> latestVersion
+    pattern = r'\[INFO\]\s+([^:]+:[^:]+:[^:]+):([^\s->]+)\s+->\s+([^\s]+)'
+    matches = re.findall(pattern, content)
+    
+    if not matches:
+        print("# 依赖更新检查结果")
+        print("")
+        print("## ✅ 所有依赖都是最新版本")
+        print("")
+        print("没有发现需要更新的依赖。")
+    else:
+        updates = []
+        for match in matches:
+            dep_coord = match[0]  # groupId:artifactId:type
+            current = match[1]
+            latest = match[2]
+            update_type = classify_update(current, latest)
+            
+            # 提取 groupId:artifactId
+            dep_parts = dep_coord.split(':')
+            dep_name = f"{dep_parts[0]}:{dep_parts[1]}" if len(dep_parts) >= 2 else dep_coord
+            
+            updates.append({
+                'name': dep_name,
+                'current': current,
+                'latest': latest,
+                'type': update_type
+            })
+        
+        # 按类型分类
+        major_updates = [u for u in updates if u['type'] == 'Major']
+        minor_updates = [u for u in updates if u['type'] == 'Minor']
+        patch_updates = [u for u in updates if u['type'] == 'Patch']
+        
+        print("# 依赖更新检查结果")
+        print("")
+        print(f"> 💡 提示：发现 **{len(updates)}** 个依赖有可用更新，建议优先更新有安全修复的版本")
+        print("")
+        print(f"## 📦 更新摘要")
+        print("")
+        print(f"- 🔴 **主要版本更新（Major）**: {len(major_updates)} 个")
+        print(f"- 🟡 **次要版本更新（Minor）**: {len(minor_updates)} 个")
+        print(f"- 🟢 **补丁版本更新（Patch）**: {len(patch_updates)} 个")
+        print("")
+        
+        # 主要版本更新（最多显示前 30 个）
+        if major_updates:
+            print("### 🔴 主要版本更新（Major）- 优先处理")
+            print("")
+            print("| 依赖 | 当前版本 | 最新版本 |")
+            print("|------|----------|----------|")
+            for update in major_updates[:30]:
+                print(f"| `{update['name']}` | `{update['current']}` | `{update['latest']}` |")
+            if len(major_updates) > 30:
+                print(f"| ... 还有 {len(major_updates) - 30} 个主要版本更新 | | |")
+            print("")
+        
+        # 次要版本更新（最多显示前 20 个）
+        if minor_updates:
+            print("### 🟡 次要版本更新（Minor）")
+            print("")
+            print("| 依赖 | 当前版本 | 最新版本 |")
+            print("|------|----------|----------|")
+            for update in minor_updates[:20]:
+                print(f"| `{update['name']}` | `{update['current']}` | `{update['latest']}` |")
+            if len(minor_updates) > 20:
+                print(f"| ... 还有 {len(minor_updates) - 20} 个次要版本更新 | | |")
+            print("")
+        
+        # 补丁版本更新（最多显示前 10 个）
+        if patch_updates:
+            print("### 🟢 补丁版本更新（Patch）- 建议及时更新")
+            print("")
+            print("| 依赖 | 当前版本 | 最新版本 |")
+            print("|------|----------|----------|")
+            for update in patch_updates[:10]:
+                print(f"| `{update['name']}` | `{update['current']}` | `{update['latest']}` |")
+            if len(patch_updates) > 10:
+                print(f"| ... 还有 {len(patch_updates) - 10} 个补丁版本更新 | | |")
+            print("")
+        
+        # 完整列表（可折叠）
+        print("---")
+        print("")
+        print("### 📋 完整更新列表")
+        print("")
+        print("<details>")
+        print(f"<summary>点击展开查看所有 {len(updates)} 个依赖更新详情</summary>")
+        print("")
+        print("```")
+        with open('target/dependency-updates.txt', 'r', encoding='utf-8') as f:
+            print(f.read())
+        print("```")
+        print("")
+        print("</details>")
+        print("")
+        print("### 💡 更新建议")
+        print("")
+        print("1. **优先更新 Major 版本**：可能包含重大功能改进和安全修复")
+        print("2. **定期更新 Minor 版本**：通常包含新功能和向后兼容的改进")
+        print("3. **及时更新 Patch 版本**：通常包含重要的 bug 修复和安全补丁")
+        print("4. **使用 Maven 命令更新**：")
+        print("   ```bash")
+        print("   # 更新所有依赖到最新版本（谨慎使用，建议先测试）")
+        print("   mvn versions:use-latest-versions")
+        print("   ")
+        print("   # 更新特定依赖")
+        print("   mvn versions:set -DnewVersion=新版本号 -DgroupId=组ID -DartifactId=构件ID")
+        print("   ```")
+
+except Exception as e:
+    print(f"# 依赖更新检查结果")
+    print("")
+    print(f"⚠️ 解析依赖更新信息时出错: {e}")
+    print("")
+    print("### 原始输出")
+    print("")
+    print("```")
+    try:
+        with open('target/dependency-updates.txt', 'r', encoding='utf-8') as f:
+            print(f.read())
+    except:
+        print("无法读取文件")
+    print("```")
+PYTHON_SCRIPT
+            ) > target/dependency-updates.md
+            
+            echo "✅ 已生成优化的依赖更新报告：target/dependency-updates.md"
+          else
+            echo "⚠️ 未找到依赖更新信息或文件为空"
           fi
         continue-on-error: true
 
@@ -253,18 +396,27 @@ jobs:
           echo "运行 OWASP Dependency-Check 安全扫描..."
           mvn verify -DskipTests
 
+      - name: List generated files
+        if: always() && steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
+        run: |
+          echo "检查生成的文件..."
+          echo "=== dependency-check-reports 目录 ==="
+          ls -lah target/dependency-check-reports/ || echo "目录不存在"
+          echo ""
+          echo "=== target 目录 ==="
+          ls -lah target/ | grep -E "(dependency|update)" || echo "未找到相关文件"
+
       - name: Upload dependency check reports
         if: always() && steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: dependency-check-reports
           path: |
-            target/dependency-check-reports/dependency-check-report.html
-            target/dependency-check-reports/dependency-check-report.json
+            target/dependency-check-reports/
             target/dependency-updates.txt
             target/dependency-updates.md
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: warn
 
       - name: Comment PR with detailed summary
         if: failure() && steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'

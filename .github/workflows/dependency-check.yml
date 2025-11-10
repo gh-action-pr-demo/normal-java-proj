@@ -280,8 +280,8 @@ jobs:
         id: dependency-check
         env:
           # NVD API key 是可选的，如果不配置会使用默认的速率限制
-          # 如果需要更高的速率限制，可以从 GitHub Secrets 配置
-          # NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+          # 如果需要更高的速率限制，可以从 GitHub Secrets 配置并取消下面的注释
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           echo "运行 OWASP Dependency-Check 安全扫描..."
           echo "注意：如果没有配置 NVD API key，可能会受到速率限制"

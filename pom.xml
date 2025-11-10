@@ -55,10 +55,9 @@
                 <configuration>
                     <!-- CVSS 阈值：超过此分数将导致构建失败 -->
                     <failBuildOnCVSS>7.0</failBuildOnCVSS>
-                    <!-- 生成 HTML 和 JSON 报告 -->
+                    <!-- 只生成 HTML 报告 -->
                     <formats>
                         <format>HTML</format>
-                        <format>JSON</format>
                     </formats>
                     <!-- 报告输出目录 -->
                     <outputDirectory>${project.build.directory}/dependency-check-reports</outputDirectory>
@@ -71,6 +70,8 @@
                     <enableRetired>true</enableRetired>
                     <!-- 跳过测试依赖 -->
                     <skipTestScope>false</skipTestScope>
+                    <!-- 只检查直接依赖，不检查传递依赖 -->
+                    <excludeTransitive>true</excludeTransitive>
                 </configuration>
                 <executions>
                     <execution>

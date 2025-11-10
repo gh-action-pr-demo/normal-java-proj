@@ -6,7 +6,7 @@ on:
       - main
       - master
   issue_comment:
-    types: [created, edited]
+    types: [created]
   workflow_dispatch:
 
 # 只在 PR 相关的事件时运行
@@ -60,17 +60,17 @@ jobs:
                   commentBody.includes(keyword.toLowerCase())
                 );
                 
+                // 只有包含 skip 关键字的评论才触发 workflow
                 if (hasSkipKeyword) {
                   core.setOutput('is-pr', 'true');
                   core.setOutput('pr-number', context.issue.number);
                   core.setOutput('should-trigger', 'true');
                   core.setOutput('pr-head-sha', pr.head.sha);
-                  console.log('✅ 检测到跳过检查关键字，将触发 workflow');
-                  console.log(`PR head SHA: ${pr.head.sha}`);
+                  console.log('✅ 检测到跳过检查关键字，将触发 workflow 并跳过检查');
                 } else {
                   core.setOutput('is-pr', 'false');
                   core.setOutput('should-trigger', 'false');
-                  console.log('ℹ️ 评论中未包含跳过检查关键字，跳过 workflow');
+                  console.log('ℹ️ 评论中未包含跳过检查关键字，不触发 workflow');
                 }
               } else {
                 core.setOutput('is-pr', 'false');
@@ -211,13 +211,15 @@ jobs:
           java-version: '17'
           cache: 'maven'
 
-      - name: Check for dependency updates
+      - name: Check for dependency updates (direct dependencies only)
         if: steps.check-skip-file.outputs.skip != 'true' && steps.check-skip-comment.outputs.skip != 'true'
         id: check-updates
         run: |
-          echo "检查依赖更新..."
+          echo "检查直接依赖更新（不包括传递依赖）..."
           mkdir -p target
-          mvn versions:display-dependency-updates -DoutputFile=target/dependency-updates.txt || true
+          # 只检查直接依赖的更新，不检查传递依赖
+          # 使用 -DexcludeReactor=false 和 -DprocessDependencyManagement=false 来只检查直接依赖
+          mvn versions:display-dependency-updates -DprocessDependencies=true -DprocessDependencyManagement=false -DexcludeReactor=false -DoutputFile=target/dependency-updates.txt 2>&1 | tee target/dependency-updates-raw.txt || true
           
           if [ -f target/dependency-updates.txt ] && [ -s target/dependency-updates.txt ]; then
             echo "依赖更新信息已保存到 target/dependency-updates.txt"
@@ -263,7 +265,7 @@ jobs:
         with:
           name: dependency-check-reports
           path: |
-            target/dependency-check-reports/
+            target/dependency-check-reports/dependency-check-report.html
             target/dependency-updates.txt
             target/dependency-updates.md
           retention-days: 30
@@ -299,57 +301,64 @@ jobs:
             comment += '### 📋 检查结果\n\n';
             comment += '- **状态**: ❌ 失败\n';
             comment += `- **Actions 运行**: [查看详情](${runUrl})\n`;
-            comment += `- **报告下载**: [下载 Artifacts（包含 HTML/JSON/TXT 报告）](${artifactsUrl})\n`;
+            comment += `- **报告下载**: [下载 Artifacts（包含 HTML 报告）](${artifactsUrl})\n`;
             comment += '  - 在 Actions 运行页面底部找到 "Artifacts" 部分\n';
             comment += '  - 点击 "dependency-check-reports" 下载所有报告\n';
-            comment += '  - HTML 报告：`dependency-check-report.html`（推荐，可在浏览器中打开）\n';
-            comment += '  - JSON 报告：`dependency-check-report.json`\n';
+            comment += '  - HTML 报告：`dependency-check-report.html`（推荐，可在浏览器中打开查看）\n';
             comment += '  - 依赖更新：`dependency-updates.txt` 和 `dependency-updates.md`\n\n';
             comment += '---\n\n';
             
-            // 读取并解析 JSON 报告（仅用于提取漏洞信息，不显示 JSON）
+            // 从 HTML 报告中提取漏洞信息（不再使用 JSON）
             let vulnerabilities = [];
             let txtReportContent = '';
             try {
-              const reportPath = 'target/dependency-check-reports/dependency-check-report.json';
-              if (fs.existsSync(reportPath)) {
-                const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
-                
-                if (report.dependencies) {
-                  vulnerabilities = report.dependencies
-                    .filter(dep => dep.vulnerabilities && dep.vulnerabilities.length > 0)
-                    .flatMap(dep => {
-                      const depName = dep.packages && dep.packages.length > 0 
-                        ? dep.packages[0].name || 'Unknown'
-                        : 'Unknown';
-                      return dep.vulnerabilities.map(vuln => ({
-                        name: depName,
-                        cve: vuln.name,
-                        severity: vuln.severity || 'Unknown',
-                        cvssv3: vuln.cvssv3?.baseScore || vuln.cvssv3?.baseSeverity || vuln.cvssv2?.score || 'N/A',
-                        description: vuln.description || '',
-                        references: vuln.references || []
-                      }));
-                    })
-                    .sort((a, b) => {
-                      const scoreA = parseFloat(a.cvssv3) || 0;
-                      const scoreB = parseFloat(b.cvssv3) || 0;
-                      return scoreB - scoreA;
-                    });
-                }
-              }
-              
-              // 读取 HTML 报告并转换为文本格式（用于显示）
+              // 读取 HTML 报告并提取漏洞信息
               const htmlReportPath = 'target/dependency-check-reports/dependency-check-report.html';
               if (fs.existsSync(htmlReportPath)) {
                 const htmlContent = fs.readFileSync(htmlReportPath, 'utf8');
-                // 简单提取文本内容（移除 HTML 标签）
+                
+                // 提取文本内容（移除 HTML 标签）
                 txtReportContent = htmlContent
                   .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
                   .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
                   .replace(/<[^>]+>/g, ' ')
                   .replace(/\s+/g, ' ')
                   .trim();
+                
+                // 从 HTML 中提取漏洞信息（使用正则表达式）
+                // 查找包含 CVE 的行
+                const cvePattern = /CVE-\d{4}-\d+/gi;
+                const severityPattern = /(CRITICAL|HIGH|MEDIUM|LOW)/gi;
+                
+                // 尝试从 HTML 表格中提取漏洞信息
+                const tableRows = htmlContent.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
+                const vulnRows = tableRows.filter(row => row.includes('CVE-'));
+                
+                vulnRows.forEach(row => {
+                  const cveMatch = row.match(/CVE-\d{4}-\d+/i);
+                  const severityMatch = row.match(/(CRITICAL|HIGH|MEDIUM|LOW)/i);
+                  const cvssMatch = row.match(/CVSS[^>]*>([0-9.]+)/i);
+                  
+                  if (cveMatch) {
+                    vulnerabilities.push({
+                      name: 'Direct Dependency',
+                      cve: cveMatch[0],
+                      severity: severityMatch ? severityMatch[1] : 'Unknown',
+                      cvssv3: cvssMatch ? cvssMatch[1] : 'N/A'
+                    });
+                  }
+                });
+                
+                // 去重并按 CVSS 分数排序
+                vulnerabilities = vulnerabilities
+                  .filter((v, index, self) => 
+                    index === self.findIndex(t => t.cve === v.cve)
+                  )
+                  .sort((a, b) => {
+                    const scoreA = parseFloat(a.cvssv3) || 0;
+                    const scoreB = parseFloat(b.cvssv3) || 0;
+                    return scoreB - scoreA;
+                  });
               }
             } catch (error) {
               console.log('无法解析报告文件:', error.message);

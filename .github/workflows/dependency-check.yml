@@ -222,123 +222,17 @@ jobs:
           if [ -f target/dependency-updates.txt ] && [ -s target/dependency-updates.txt ]; then
             echo "依赖更新信息已保存到 target/dependency-updates.txt"
             
-            # 创建 Python 脚本文件
-            cat > /tmp/parse_updates.py << 'PYEOF'
-import re
-import sys
-
-def parse_version(version_str):
-    if not version_str:
-        return (0, 0, 0)
-    version_str = re.sub(r'[^0-9.]', '', version_str.split()[0] if ' ' in version_str else version_str)
-    parts = version_str.split('.')
-    major = int(parts[0]) if len(parts) > 0 and parts[0].isdigit() else 0
-    minor = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-    patch = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
-    return (major, minor, patch)
-
-def classify_update(current, latest):
-    cv = parse_version(current)
-    lv = parse_version(latest)
-    if lv[0] > cv[0]:
-        return 'Major'
-    elif lv[1] > cv[1]:
-        return 'Minor'
-    elif lv[2] > cv[2]:
-        return 'Patch'
-    return 'Unknown'
-
-try:
-    with open('target/dependency-updates.txt', 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    pattern = r'\[INFO\]\s+([^:]+:[^:]+:[^:]+):([^\s->]+)\s+->\s+([^\s]+)'
-    matches = re.findall(pattern, content)
-    
-    if not matches:
-        print("# 依赖更新检查结果\n")
-        print("## ✅ 所有依赖都是最新版本\n")
-        print("没有发现需要更新的依赖。")
-    else:
-        updates = []
-        for match in matches:
-            dep_coord = match[0]
-            current = match[1]
-            latest = match[2]
-            update_type = classify_update(current, latest)
-            dep_parts = dep_coord.split(':')
-            dep_name = f"{dep_parts[0]}:{dep_parts[1]}" if len(dep_parts) >= 2 else dep_coord
-            updates.append({'name': dep_name, 'current': current, 'latest': latest, 'type': update_type})
-        
-        major_updates = [u for u in updates if u['type'] == 'Major']
-        minor_updates = [u for u in updates if u['type'] == 'Minor']
-        patch_updates = [u for u in updates if u['type'] == 'Patch']
-        
-        print("# 依赖更新检查结果\n")
-        print(f"> 💡 提示：发现 **{len(updates)}** 个依赖有可用更新，建议优先更新有安全修复的版本\n")
-        print(f"## 📦 更新摘要\n")
-        print(f"- 🔴 **主要版本更新（Major）**: {len(major_updates)} 个")
-        print(f"- 🟡 **次要版本更新（Minor）**: {len(minor_updates)} 个")
-        print(f"- 🟢 **补丁版本更新（Patch）**: {len(patch_updates)} 个\n")
-        
-        if major_updates:
-            print("### 🔴 主要版本更新（Major）- 优先处理\n")
-            print("| 依赖 | 当前版本 | 最新版本 |\n|------|----------|----------|")
-            for update in major_updates[:30]:
-                print(f"| `{update['name']}` | `{update['current']}` | `{update['latest']}` |")
-            if len(major_updates) > 30:
-                print(f"| ... 还有 {len(major_updates) - 30} 个主要版本更新 | | |")
-            print("")
-        
-        if minor_updates:
-            print("### 🟡 次要版本更新（Minor）\n")
-            print("| 依赖 | 当前版本 | 最新版本 |\n|------|----------|----------|")
-            for update in minor_updates[:20]:
-                print(f"| `{update['name']}` | `{update['current']}` | `{update['latest']}` |")
-            if len(minor_updates) > 20:
-                print(f"| ... 还有 {len(minor_updates) - 20} 个次要版本更新 | | |")
-            print("")
-        
-        if patch_updates:
-            print("### 🟢 补丁版本更新（Patch）- 建议及时更新\n")
-            print("| 依赖 | 当前版本 | 最新版本 |\n|------|----------|----------|")
-            for update in patch_updates[:10]:
-                print(f"| `{update['name']}` | `{update['current']}` | `{update['latest']}` |")
-            if len(patch_updates) > 10:
-                print(f"| ... 还有 {len(patch_updates) - 10} 个补丁版本更新 | | |")
-            print("")
-        
-        print("---\n")
-        print("### 📋 完整更新列表\n")
-        print("<details>")
-        print(f"<summary>点击展开查看所有 {len(updates)} 个依赖更新详情</summary>\n")
-        print("```")
-        with open('target/dependency-updates.txt', 'r', encoding='utf-8') as f:
-            print(f.read())
-        print("```\n")
-        print("</details>\n")
-        print("### 💡 更新建议\n")
-        print("1. **优先更新 Major 版本**：可能包含重大功能改进和安全修复")
-        print("2. **定期更新 Minor 版本**：通常包含新功能和向后兼容的改进")
-        print("3. **及时更新 Patch 版本**：通常包含重要的 bug 修复和安全补丁")
-        print("4. **使用 Maven 命令更新**：")
-        print("   ```bash")
-        print("   mvn versions:use-latest-versions")
-        print("   ```")
-except Exception as e:
-    print(f"# 依赖更新检查结果\n")
-    print(f"⚠️ 解析依赖更新信息时出错: {e}\n")
-    print("### 原始输出\n```")
-    try:
-        with open('target/dependency-updates.txt', 'r', encoding='utf-8') as f:
-            print(f.read())
-    except:
-        print("无法读取文件")
-    print("```")
-PYEOF
-            
-            # 运行 Python 脚本生成报告
-            python3 /tmp/parse_updates.py > target/dependency-updates.md
+            # 使用外部 Python 脚本生成格式化的 Markdown 报告
+            python3 scripts/parse-dependency-updates.py > target/dependency-updates.md || {
+              echo "⚠️ Python 脚本执行失败，使用原始输出"
+              echo "# 依赖更新检查结果" > target/dependency-updates.md
+              echo "" >> target/dependency-updates.md
+              echo "### 原始输出" >> target/dependency-updates.md
+              echo "" >> target/dependency-updates.md
+              echo "\`\`\`" >> target/dependency-updates.md
+              cat target/dependency-updates.txt >> target/dependency-updates.md
+              echo "\`\`\`" >> target/dependency-updates.md
+            }
             
             echo "✅ 已生成优化的依赖更新报告：target/dependency-updates.md"
           else

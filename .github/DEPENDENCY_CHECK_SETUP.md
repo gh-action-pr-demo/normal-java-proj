@@ -354,21 +354,10 @@ env:
 
 3. 将 `.github/maven-settings.xml` 添加到 `.gitignore`（如果包含敏感信息）
 
-#### 方式 2：GitHub Secrets（推荐用于私有仓库）
-
-1. 前往仓库 Settings → Secrets and variables → Actions
-2. 添加以下 Secrets：
-   - `MAVEN_NEXUS_URL`：私服地址（如：`https://nexus.example.com/repository/maven-public/`）
-   - `MAVEN_NEXUS_USERNAME`：用户名
-   - `MAVEN_NEXUS_PASSWORD`：密码
-
-配置后，workflow 会自动生成 `settings.xml` 并使用私服。
-
 #### 验证配置
 
 配置后，运行 workflow 时会在日志中看到：
-- `✅ 使用项目级 Maven settings.xml` 或
-- `✅ 使用 GitHub Secrets 配置的私服信息生成 settings.xml`
+- `✅ 使用项目级 Maven settings.xml`
 
 如果未配置，会显示：
 - `ℹ️ 未配置私服，使用默认 Maven 中央仓库`

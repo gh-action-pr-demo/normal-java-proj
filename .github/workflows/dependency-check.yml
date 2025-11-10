@@ -272,28 +272,6 @@ jobs:
           if [ -f .github/maven-settings.xml ]; then
             echo "✅ 使用项目级 Maven settings.xml"
             cp .github/maven-settings.xml ~/.m2/settings.xml
-          # 如果通过 GitHub Secrets 配置了私服信息，可以动态生成 settings.xml
-          elif [ -n "${{ secrets.MAVEN_NEXUS_URL }}" ]; then
-            echo "✅ 使用 GitHub Secrets 配置的私服信息生成 settings.xml"
-            cat > ~/.m2/settings.xml <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0">
-  <servers>
-    <server>
-      <id>nexus</id>
-      <username>${{ secrets.MAVEN_NEXUS_USERNAME }}</username>
-      <password>${{ secrets.MAVEN_NEXUS_PASSWORD }}</password>
-    </server>
-  </servers>
-  <mirrors>
-    <mirror>
-      <id>nexus</id>
-      <mirrorOf>*</mirrorOf>
-      <url>${{ secrets.MAVEN_NEXUS_URL }}</url>
-    </mirror>
-  </mirrors>
-</settings>
-EOF
           else
             echo "ℹ️ 未配置私服，使用默认 Maven 中央仓库"
           fi

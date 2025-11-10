@@ -61,38 +61,29 @@ jobs:
                 
                 console.log(`PR head SHA: ${pr.head.sha}`);
                 
-                // 检查评论中是否包含 skip 关键字
-                const skipKeywords = [
-                  '[skip dependency check]',
-                  '[skip-dependency-check]',
-                  '[skip dependency-check]',
-                  '[skip-dependency check]'
-                ];
+                // 检查评论内容是否完全等于（忽略大小写）[skip-dependency-check]
+                const commentBody = context.payload.comment.body.trim();
+                const commentBodyLower = commentBody.toLowerCase();
+                const skipKeyword = '[skip-dependency-check]';
                 
-                const commentBody = context.payload.comment.body.toLowerCase();
-                console.log(`评论内容（小写）: ${commentBody}`);
+                console.log(`评论内容: ${commentBody}`);
+                console.log(`评论内容（小写）: ${commentBodyLower}`);
+                console.log(`目标关键字: ${skipKeyword}`);
                 
-                const hasSkipKeyword = skipKeywords.some(keyword => {
-                  const found = commentBody.includes(keyword.toLowerCase());
-                  if (found) {
-                    console.log(`✅ 找到关键字: ${keyword}`);
-                  }
-                  return found;
-                });
+                // 只有评论内容完全等于（忽略大小写）[skip-dependency-check] 时才触发
+                const isExactMatch = commentBodyLower === skipKeyword.toLowerCase();
+                console.log(`是否完全匹配: ${isExactMatch}`);
                 
-                console.log(`是否包含 skip 关键字: ${hasSkipKeyword}`);
-                
-                // 只有包含 skip 关键字的评论才触发 workflow
-                if (hasSkipKeyword) {
+                if (isExactMatch) {
                   core.setOutput('is-pr', 'true');
                   core.setOutput('pr-number', context.issue.number);
                   core.setOutput('should-trigger', 'true');
                   core.setOutput('pr-head-sha', pr.head.sha);
-                  console.log('✅ 检测到跳过检查关键字，将触发 workflow 并跳过检查');
+                  console.log('✅ 评论内容完全匹配 [skip-dependency-check]，将触发 workflow 并跳过检查');
                 } else {
                   core.setOutput('is-pr', 'false');
                   core.setOutput('should-trigger', 'false');
-                  console.log('ℹ️ 评论中未包含跳过检查关键字，不触发 workflow');
+                  console.log('ℹ️ 评论内容不匹配 [skip-dependency-check]，不触发 workflow');
                 }
               } else {
                 console.log('ℹ️ 这不是 PR 的评论，跳过');
@@ -332,137 +323,60 @@ jobs:
             comment += '  - 在 Actions 运行页面底部找到 "Artifacts" 部分\n';
             comment += '  - 点击 "dependency-check-reports" 下载所有报告\n';
             comment += '  - HTML 报告：`dependency-check-report.html`（推荐，可在浏览器中打开查看）\n';
-            comment += '  - 依赖更新：`dependency-updates.txt` 和 `dependency-updates.md`\n\n';
+            comment += '  - 依赖更新：`dependency-updates.txt`\n\n';
             comment += '---\n\n';
             
-            // 从 HTML 报告中提取漏洞信息（不再使用 JSON）
-            let vulnerabilities = [];
-            let txtReportContent = '';
+            // 直接输出 HTML 报告内容（用代码块包裹）
             try {
-              // 读取 HTML 报告并提取漏洞信息
               const htmlReportPath = 'target/dependency-check-reports/dependency-check-report.html';
               if (fs.existsSync(htmlReportPath)) {
                 const htmlContent = fs.readFileSync(htmlReportPath, 'utf8');
                 
-                // 提取文本内容（移除 HTML 标签）
-                txtReportContent = htmlContent
-                  .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-                  .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-                  .replace(/<[^>]+>/g, ' ')
-                  .replace(/\s+/g, ' ')
-                  .trim();
+                comment += '### 📄 HTML 报告内容\n\n';
+                comment += '<details>\n<summary>点击展开查看 HTML 报告（建议下载后在浏览器中打开）</summary>\n\n';
+                comment += '```html\n';
                 
-                // 从 HTML 中提取漏洞信息（使用正则表达式）
-                // 查找包含 CVE 的行
-                const cvePattern = /CVE-\d{4}-\d+/gi;
-                const severityPattern = /(CRITICAL|HIGH|MEDIUM|LOW)/gi;
+                // 限制输出长度，避免评论过长（GitHub 评论限制约为 65536 字符）
+                const maxChars = 50000;
+                const displayContent = htmlContent.length > maxChars 
+                  ? htmlContent.substring(0, maxChars) + `\n\n... (报告还有 ${htmlContent.length - maxChars} 个字符，请下载完整 HTML 报告查看)`
+                  : htmlContent;
                 
-                // 尝试从 HTML 表格中提取漏洞信息
-                const tableRows = htmlContent.match(/<tr[^>]*>[\s\S]*?<\/tr>/gi) || [];
-                const vulnRows = tableRows.filter(row => row.includes('CVE-'));
-                
-                vulnRows.forEach(row => {
-                  const cveMatch = row.match(/CVE-\d{4}-\d+/i);
-                  const severityMatch = row.match(/(CRITICAL|HIGH|MEDIUM|LOW)/i);
-                  const cvssMatch = row.match(/CVSS[^>]*>([0-9.]+)/i);
-                  
-                  if (cveMatch) {
-                    vulnerabilities.push({
-                      name: 'Direct Dependency',
-                      cve: cveMatch[0],
-                      severity: severityMatch ? severityMatch[1] : 'Unknown',
-                      cvssv3: cvssMatch ? cvssMatch[1] : 'N/A'
-                    });
-                  }
-                });
-                
-                // 去重并按 CVSS 分数排序
-                vulnerabilities = vulnerabilities
-                  .filter((v, index, self) => 
-                    index === self.findIndex(t => t.cve === v.cve)
-                  )
-                  .sort((a, b) => {
-                    const scoreA = parseFloat(a.cvssv3) || 0;
-                    const scoreB = parseFloat(b.cvssv3) || 0;
-                    return scoreB - scoreA;
-                  });
+                comment += displayContent;
+                comment += '\n```\n';
+                comment += '</details>\n\n';
               }
             } catch (error) {
-              console.log('无法解析报告文件:', error.message);
-            }
-            
-            // 添加漏洞列表
-            if (vulnerabilities.length > 0) {
-              comment += '### 🚨 发现的高风险漏洞\n\n';
-              comment += `共发现 **${vulnerabilities.length}** 个高风险漏洞：\n\n`;
-              comment += '| 依赖 | CVE | 严重程度 | CVSS 分数 |\n';
-              comment += '|------|-----|----------|----------|\n';
-              
-              const displayCount = Math.min(vulnerabilities.length, 20);
-              vulnerabilities.slice(0, displayCount).forEach(v => {
-                const name = (v.name || 'Unknown').replace(/\|/g, '\\|').substring(0, 50);
-                const cve = (v.cve || 'Unknown').replace(/\|/g, '\\|');
-                const severity = (v.severity || 'Unknown').replace(/\|/g, '\\|');
-                comment += `| ${name} | ${cve} | ${severity} | ${v.cvssv3} |\n`;
-              });
-              
-              if (vulnerabilities.length > displayCount) {
-                comment += `\n*还有 ${vulnerabilities.length - displayCount} 个漏洞，请查看完整报告*\n\n`;
-              }
-              
-              comment += '\n---\n\n';
+              console.log('无法读取 HTML 报告文件:', error.message);
             }
             
             // 添加修复建议
             comment += '### 💡 修复建议\n\n';
-            comment += '1. **更新依赖版本**：优先更新到最新版本（如果可用）\n';
-            comment += '2. **查看详细报告**：下载 HTML 报告查看完整信息\n';
+            comment += '1. **查看详细报告**：下载 HTML 报告并在浏览器中打开查看完整信息\n';
+            comment += '2. **更新依赖版本**：优先更新到最新版本（如果可用）\n';
             comment += '3. **添加抑制规则**：如果漏洞可以接受，在 `dependency-check-suppression.xml` 中添加抑制规则\n';
             comment += '4. **跳过检查**：如果本次 PR 不涉及依赖变更，可以在 PR 中添加评论 `[skip-dependency-check]` 跳过检查\n';
             comment += '5. **重新提交**：修复后重新提交 PR\n\n';
             comment += '---\n\n';
             
-            // 添加原始检查结果（TXT 格式，可折叠）
-            if (txtReportContent) {
-              comment += '### 📝 原始检查结果（文本格式）\n\n';
-              comment += '<details>\n<summary>点击展开查看原始文本报告（前 2000 字符）</summary>\n\n';
-              comment += '```\n';
-              
-              // 限制输出长度
-              const maxChars = 2000;
-              const displayContent = txtReportContent.length > maxChars 
-                ? txtReportContent.substring(0, maxChars) + `\n\n... (还有 ${txtReportContent.length - maxChars} 个字符，请下载完整报告查看)`
-                : txtReportContent;
-              
-              comment += displayContent;
-              comment += '\n```\n';
-              comment += '</details>\n\n';
-            }
-            
-            // 添加依赖更新信息（如果有，也放到可折叠区域）
+            // 添加依赖更新信息（如果有）
             try {
               const updatesPath = 'target/dependency-updates.txt';
               if (fs.existsSync(updatesPath)) {
                 const updatesContent = fs.readFileSync(updatesPath, 'utf8');
                 if (updatesContent.trim()) {
-                  comment += '---\n\n';
                   comment += '### 📦 依赖更新检查结果\n\n';
                   comment += '<details>\n<summary>点击展开查看依赖更新详情</summary>\n\n';
+                  comment += '```\n';
                   
-                  // 读取 Markdown 格式的更新报告
-                  const updatesMdPath = 'target/dependency-updates.md';
-                  if (fs.existsSync(updatesMdPath)) {
-                    const mdContent = fs.readFileSync(updatesMdPath, 'utf8');
-                    comment += mdContent;
-                  } else {
-                    comment += '```\n';
-                    comment += updatesContent.substring(0, 2000);
-                    if (updatesContent.length > 2000) {
-                      comment += `\n\n... (还有 ${updatesContent.length - 2000} 个字符)`;
-                    }
-                    comment += '\n```\n';
-                  }
+                  // 限制输出长度
+                  const maxChars = 10000;
+                  const displayContent = updatesContent.length > maxChars 
+                    ? updatesContent.substring(0, maxChars) + `\n\n... (还有 ${updatesContent.length - maxChars} 个字符，请下载完整报告查看)`
+                    : updatesContent;
                   
+                  comment += displayContent;
+                  comment += '\n```\n';
                   comment += '</details>\n';
                 }
               }

@@ -45,5 +45,17 @@
         <packageUrl regex="true">pkg:maven/com\.example/example-library@.*</packageUrl>
     </suppress>
     -->
+    
+    <!-- 白名单：跳过 Log4j 1.2.17 的检查（示例：已知风险但暂时无法升级） -->
+    <suppress>
+        <notes>白名单：Log4j 1.2.17 已知有漏洞，但项目暂时无法升级，已记录风险</notes>
+        <packageUrl regex="true">pkg:maven/log4j/log4j@1\.2\.17</packageUrl>
+    </suppress>
+    
+    <!-- 白名单：跳过旧版本 Apache Commons Lang 的某些低风险漏洞 -->
+    <suppress>
+        <notes>白名单：Apache Commons Lang 2.6 版本较旧，但仅用于非关键功能，风险可控</notes>
+        <packageUrl regex="true">pkg:maven/commons-lang/commons-lang@2\.6</packageUrl>
+    </suppress>
 </suppressions>
 

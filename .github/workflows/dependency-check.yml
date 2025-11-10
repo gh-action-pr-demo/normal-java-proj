@@ -14,7 +14,6 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
-  issue-comments: write
 
 # 只在 PR 相关的事件时运行
 jobs:
@@ -24,7 +23,6 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
-      issue-comments: write
     outputs:
       is-pr: ${{ steps.check.outputs.is-pr }}
       pr-number: ${{ steps.check.outputs.pr-number }}

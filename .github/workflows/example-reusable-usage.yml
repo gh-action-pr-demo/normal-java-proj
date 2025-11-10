@@ -1,0 +1,23 @@
+# 示例：如何在项目中使用组织级可重用 workflow
+# 这是一个示例文件，展示如何引用组织级的可重用 workflow
+# 实际使用时，将内容复制到 .github/workflows/dependency-check.yml
+
+name: Dependency Check (Using Reusable Workflow)
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+
+jobs:
+  dependency-check:
+    uses: ./.github/workflows/reusable-dependency-check.yml
+    with:
+      java-version: '17'
+      fail-on-cvss: '7.0'
+      # 组织级抑制规则文件 URL（如果使用组织级配置）
+      # org-suppression-url: 'https://raw.githubusercontent.com/your-org/.github/main/configs/dependency-check-suppression.xml'
+    secrets:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

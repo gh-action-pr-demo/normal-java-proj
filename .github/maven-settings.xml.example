@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven Settings 配置文件示例
+  
+  使用方法：
+  1. 复制此文件为 .github/maven-settings.xml
+  2. 根据实际情况修改私服地址和认证信息
+  3. 如果使用 GitHub Secrets，可以通过 workflow 动态生成此文件
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 
+          http://maven.apache.org/xsd/settings-1.2.0.xsd">
+    
+    <!-- 私服服务器认证信息 -->
+    <servers>
+        <server>
+            <id>your-nexus-releases</id>
+            <username>your-username</username>
+            <password>your-password</password>
+        </server>
+        <server>
+            <id>your-nexus-snapshots</id>
+            <username>your-username</username>
+            <password>your-password</password>
+        </server>
+    </servers>
+    
+    <!-- 镜像配置：使用私服作为所有仓库的镜像 -->
+    <mirrors>
+        <mirror>
+            <id>your-nexus</id>
+            <mirrorOf>*</mirrorOf>
+            <url>https://your-nexus-server/repository/maven-public/</url>
+        </mirror>
+    </mirrors>
+    
+    <!-- 配置文件激活 -->
+    <profiles>
+        <profile>
+            <id>default</id>
+            <repositories>
+                <repository>
+                    <id>central</id>
+                    <url>https://your-nexus-server/repository/maven-public/</url>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
+                </repository>
+            </repositories>
+            <pluginRepositories>
+                <pluginRepository>
+                    <id>central</id>
+                    <url>https://your-nexus-server/repository/maven-public/</url>
+                    <releases>
+                        <enabled>true</enabled>
+                    </releases>
+                    <snapshots>
+                        <enabled>true</enabled>
+                    </snapshots>
+                </pluginRepository>
+            </pluginRepositories>
+        </profile>
+    </profiles>
+    
+    <activeProfiles>
+        <activeProfile>default</activeProfile>
+    </activeProfiles>
+</settings>
+

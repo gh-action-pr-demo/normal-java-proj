@@ -15,7 +15,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       - name: Dependency Review
-        uses: github/dependency-review-action@v4
+        uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
           # 可选配置示例：允许版本范围或预览版

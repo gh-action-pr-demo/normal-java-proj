@@ -1,0 +1,63 @@
+name: Dependency Review Comment (target)
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: read
+
+jobs:
+  post-comment:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Check skip keywords in latest PR comment
+        id: skipchk
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100
+            });
+            const patterns = [
+              /\[skip dependency check\]/i,
+              /\[skip-dependency-check\]/i,
+              /\[skip dependency-check\]/i,
+              /\[skip-dependency check\]/i
+            ];
+            const latest = comments.length ? comments[comments.length - 1] : { body: '' };
+            const hasSkip = patterns.some(p => p.test(latest.body || ''));
+            core.setOutput('skip', String(hasSkip));
+
+      - name: Skip notice
+        if: steps.skipchk.outputs.skip == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: "✅ 已根据评论关键字跳过依赖变更审查（Dependency Review）。"
+            });
+
+      - name: Early exit after skip
+        if: steps.skipchk.outputs.skip == 'true'
+        run: echo "Skipped by keyword." && exit 0
+
+      - name: Dependency Review (comment)
+        uses: actions/dependency-review-action@v4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: true
+
+

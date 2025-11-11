@@ -32,7 +32,8 @@ jobs:
               /\[skip dependency-check\]/i,
               /\[skip-dependency check\]/i
             ];
-            const hasSkip = comments.some(c => patterns.some(p => p.test(c.body || '')));
+            const latest = comments.length ? comments[comments.length - 1] : { body: '' };
+            const hasSkip = patterns.some(p => p.test(latest.body || ''));
             core.setOutput('skip', String(hasSkip));
 
       - name: Skip notice

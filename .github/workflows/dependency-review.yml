@@ -34,42 +34,185 @@ jobs:
         with:
           script: |
             try {
+              // 获取 PR 的依赖变更和新增漏洞
               const { data: diffRange } = await github.rest.dependencyGraph.diffRange({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
               });
 
+              // 获取新增的漏洞（PR 引入的）
+              const newVulnerabilities = diffRange.vulnerabilities || [];
+              
+              // 获取 head 分支的所有漏洞（包括新增和已存在的）
+              // 通过比较 head 和 head 的父 commit 来获取 head 的所有漏洞
+              let allHeadVulnerabilities = [];
+              try {
+                const { data: headCommit } = await github.rest.repos.getCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: context.payload.pull_request.head.sha
+                });
+                
+                if (headCommit.parents && headCommit.parents.length > 0) {
+                  const parentSha = headCommit.parents[0].sha;
+                  const { data: headDiff } = await github.rest.dependencyGraph.diffRange({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    basehead: `${parentSha}...${context.payload.pull_request.head.sha}`
+                  });
+                  allHeadVulnerabilities = headDiff.vulnerabilities || [];
+                }
+              } catch (e) {
+                console.log('无法获取 head 分支完整漏洞信息:', e.message);
+                // 如果无法获取，尝试使用 base 分支的漏洞作为参考
+                try {
+                  const { data: baseCommit } = await github.rest.repos.getCommit({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    ref: context.payload.pull_request.base.sha
+                  });
+                  
+                  if (baseCommit.parents && baseCommit.parents.length > 0) {
+                    const parentSha = baseCommit.parents[0].sha;
+                    const { data: baseDiff } = await github.rest.dependencyGraph.diffRange({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      basehead: `${parentSha}...${context.payload.pull_request.base.sha}`
+                    });
+                    allHeadVulnerabilities = baseDiff.vulnerabilities || [];
+                  }
+                } catch (e2) {
+                  console.log('无法获取 base 分支漏洞信息:', e2.message);
+                }
+              }
+
+              // 计算已存在的漏洞 = head 的所有漏洞 - 新增的漏洞
+              const newVulnKeys = new Set(
+                newVulnerabilities.map(v => `${v.package.name}@${v.package.version}:${v.advisory?.ghsa_id || v.advisory?.cve_id || ''}`)
+              );
+              const existingVulnerabilities = allHeadVulnerabilities.filter(v => {
+                const key = `${v.package.name}@${v.package.version}:${v.advisory?.ghsa_id || v.advisory?.cve_id || ''}`;
+                return !newVulnKeys.has(key);
+              });
+
+              const hasNewVulns = newVulnerabilities.length > 0;
+              const hasExistingVulns = existingVulnerabilities.length > 0;
+              const hasVulns = hasNewVulns || hasExistingVulns;
+
               let commentBody = `## 🔍 依赖安全检查报告\n\n`;
               commentBody += `**检查时间**: ${new Date().toISOString()}\n`;
               commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
 
-              const vulnerabilities = diffRange.vulnerabilities || [];
-              const hasVulns = vulnerabilities.length > 0;
+              // 显示新增漏洞
+              if (hasNewVulns) {
+                commentBody += `### ⚠️ 本次 PR 引入的漏洞 (${newVulnerabilities.length} 个)\n\n`;
+                
+                const newSeverityCounts = {};
+                newVulnerabilities.forEach(vuln => {
+                  const severity = vuln.severity || 'unknown';
+                  newSeverityCounts[severity] = (newSeverityCounts[severity] || 0) + 1;
+                });
+
+                commentBody += `**漏洞统计**:\n`;
+                Object.entries(newSeverityCounts).forEach(([severity, count]) => {
+                  const emoji = severity === 'critical' ? '🔴' : severity === 'high' ? '🟠' : severity === 'moderate' ? '🟡' : '⚪';
+                  commentBody += `- ${emoji} **${severity.toUpperCase()}**: ${count} 个\n`;
+                });
+
+                commentBody += `\n**详细列表**:\n\n`;
+                newVulnerabilities.forEach((vuln, index) => {
+                  const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
+                  commentBody += `${index + 1}. ${severityEmoji} **${vuln.package.name}@${vuln.package.version}**\n`;
+                  commentBody += `   - **严重程度**: ${vuln.severity || 'unknown'}\n`;
+                  if (vuln.advisory) {
+                    commentBody += `   - **CVE**: ${vuln.advisory.ghsa_id || vuln.advisory.cve_id || 'N/A'}\n`;
+                    commentBody += `   - **摘要**: ${vuln.advisory.summary || 'N/A'}\n`;
+                    if (vuln.advisory.cvss?.score) {
+                      commentBody += `   - **CVSS 分数**: ${vuln.advisory.cvss.score}\n`;
+                    }
+                  }
+                  if (vuln.first_patched_version) {
+                    commentBody += `   - **建议升级至**: ${vuln.first_patched_version.identifier || vuln.first_patched_version}\n`;
+                  }
+                  commentBody += `\n`;
+                });
+              } else if (diffRange.change_type !== 'removed') {
+                commentBody += `✅ **本次 PR 未引入新的安全漏洞**\n\n`;
+              }
+
+              // 显示已存在的漏洞
+              if (hasExistingVulns) {
+                commentBody += `\n### 📋 代码库中已存在的未修复漏洞 (${existingVulnerabilities.length} 个)\n\n`;
+                commentBody += `*这些漏洞在本次 PR 之前就已存在，建议尽快修复*\n\n`;
+                
+                const existingSeverityCounts = {};
+                existingVulnerabilities.forEach(vuln => {
+                  const severity = vuln.severity || 'unknown';
+                  existingSeverityCounts[severity] = (existingSeverityCounts[severity] || 0) + 1;
+                });
+
+                commentBody += `**漏洞统计**:\n`;
+                Object.entries(existingSeverityCounts).forEach(([severity, count]) => {
+                  const emoji = severity === 'critical' ? '🔴' : severity === 'high' ? '🟠' : severity === 'moderate' ? '🟡' : '⚪';
+                  commentBody += `- ${emoji} **${severity.toUpperCase()}**: ${count} 个\n`;
+                });
+
+                commentBody += `\n**详细列表**:\n\n`;
+                existingVulnerabilities.forEach((vuln, index) => {
+                  const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
+                  commentBody += `${index + 1}. ${severityEmoji} **${vuln.package.name}@${vuln.package.version}**\n`;
+                  commentBody += `   - **严重程度**: ${vuln.severity || 'unknown'}\n`;
+                  if (vuln.advisory) {
+                    commentBody += `   - **CVE**: ${vuln.advisory.ghsa_id || vuln.advisory.cve_id || 'N/A'}\n`;
+                    commentBody += `   - **摘要**: ${vuln.advisory.summary || 'N/A'}\n`;
+                    if (vuln.advisory.cvss?.score) {
+                      commentBody += `   - **CVSS 分数**: ${vuln.advisory.cvss.score}\n`;
+                    }
+                  }
+                  if (vuln.first_patched_version) {
+                    commentBody += `   - **建议升级至**: ${vuln.first_patched_version.identifier || vuln.first_patched_version}\n`;
+                  }
+                  commentBody += `\n`;
+                });
+              } else if (!hasNewVulns && diffRange.change_type !== 'removed') {
+                commentBody += `\n✅ **代码库中未发现已存在的安全漏洞**\n\n`;
+              }
+
+              // 显示依赖变更
+              const changes = diffRange.changes || [];
+              if (changes.length > 0) {
+                commentBody += `\n### 📦 依赖变更\n\n`;
+                changes.forEach(change => {
+                  const changeType = change.change_type === 'added' ? '➕' : change.change_type === 'removed' ? '➖' : '🔄';
+                  commentBody += `${changeType} **${change.manifest}**: ${change.name}@${change.version}\n`;
+                });
+              }
 
               if (diffRange.change_type === 'removed') {
+                commentBody = `## 🔍 依赖安全检查报告\n\n`;
+                commentBody += `**检查时间**: ${new Date().toISOString()}\n`;
+                commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
                 commentBody += `✅ **无依赖变更** - 本次提交未修改依赖项\n`;
-              } else {
-                if (vulnerabilities.length === 0) {
-                  commentBody += `✅ **未发现安全漏洞**\n\n`;
-                  commentBody += `本次依赖变更未引入已知的安全漏洞。\n`;
-                } else {
-                  commentBody += `⚠️ **发现 ${vulnerabilities.length} 个安全漏洞**\n\n`;
+                
+                if (hasExistingVulns) {
+                  commentBody += `\n### 📋 代码库中已存在的未修复漏洞 (${existingVulnerabilities.length} 个)\n\n`;
+                  commentBody += `*这些漏洞在本次 PR 之前就已存在，建议尽快修复*\n\n`;
                   
-                  const severityCounts = {};
-                  vulnerabilities.forEach(vuln => {
+                  const existingSeverityCounts = {};
+                  existingVulnerabilities.forEach(vuln => {
                     const severity = vuln.severity || 'unknown';
-                    severityCounts[severity] = (severityCounts[severity] || 0) + 1;
+                    existingSeverityCounts[severity] = (existingSeverityCounts[severity] || 0) + 1;
                   });
 
-                  commentBody += `### 漏洞统计\n`;
-                  Object.entries(severityCounts).forEach(([severity, count]) => {
+                  commentBody += `**漏洞统计**:\n`;
+                  Object.entries(existingSeverityCounts).forEach(([severity, count]) => {
                     const emoji = severity === 'critical' ? '🔴' : severity === 'high' ? '🟠' : severity === 'moderate' ? '🟡' : '⚪';
                     commentBody += `- ${emoji} **${severity.toUpperCase()}**: ${count} 个\n`;
                   });
 
-                  commentBody += `\n### 详细漏洞列表\n\n`;
-                  vulnerabilities.forEach((vuln, index) => {
+                  commentBody += `\n**详细列表**:\n\n`;
+                  existingVulnerabilities.forEach((vuln, index) => {
                     const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
                     commentBody += `${index + 1}. ${severityEmoji} **${vuln.package.name}@${vuln.package.version}**\n`;
                     commentBody += `   - **严重程度**: ${vuln.severity || 'unknown'}\n`;
@@ -85,16 +228,8 @@ jobs:
                     }
                     commentBody += `\n`;
                   });
-                }
-
-                // 显示依赖变更
-                const changes = diffRange.changes || [];
-                if (changes.length > 0) {
-                  commentBody += `\n### 依赖变更\n\n`;
-                  changes.forEach(change => {
-                    const changeType = change.change_type === 'added' ? '➕' : change.change_type === 'removed' ? '➖' : '🔄';
-                    commentBody += `${changeType} **${change.manifest}**: ${change.name}@${change.version}\n`;
-                  });
+                } else {
+                  commentBody += `\n✅ **代码库中未发现已存在的安全漏洞**\n\n`;
                 }
               }
 

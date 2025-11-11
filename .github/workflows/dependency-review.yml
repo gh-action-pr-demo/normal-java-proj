@@ -29,6 +29,8 @@ jobs:
               prNumber: '',
               headRef: '',
               baseRef: '',
+              headSha: '',
+              baseSha: '',
               commentBody: ''
             };
             if (eventName === 'pull_request') {
@@ -36,6 +38,8 @@ jobs:
               result.prNumber = context.payload.pull_request.number;
               result.headRef = context.payload.pull_request.head.ref;
               result.baseRef = context.payload.pull_request.base.ref;
+              result.headSha = context.payload.pull_request.head.sha;
+              result.baseSha = context.payload.pull_request.base.sha;
             } else if (eventName === 'issue_comment') {
               const isPR = !!context.payload.issue.pull_request;
               result.isPR = isPR;
@@ -49,6 +53,8 @@ jobs:
                 });
                 result.headRef = pr.data.head.ref;
                 result.baseRef = pr.data.base.ref;
+                result.headSha = pr.data.head.sha;
+                result.baseSha = pr.data.base.sha;
               }
             }
             core.setOutput('event', result.event);
@@ -56,6 +62,8 @@ jobs:
             core.setOutput('prNumber', String(result.prNumber));
             core.setOutput('headRef', result.headRef);
             core.setOutput('baseRef', result.baseRef);
+            core.setOutput('headSha', result.headSha);
+            core.setOutput('baseSha', result.baseSha);
             core.setOutput('commentBody', result.commentBody);
 
       - name: No-op when issue_comment is not on a PR
@@ -104,7 +112,5 @@ jobs:
         with:
           fail-on-severity: high
           comment-summary-in-pr: true
-          base-ref: ${{ steps.ctx.outputs.baseRef }}
-          head-ref: ${{ steps.ctx.outputs.headRef }}
 
 

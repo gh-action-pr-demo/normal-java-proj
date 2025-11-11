@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 10
+    allow:
+      - dependency-type: "direct"
+    # 提交消息格式
+    commit-message:
+      prefix: "fix"
+      include: "scope"
+    # 启用安全更新（Dependabot 会自动创建 PR 修复安全漏洞）
+    # 注意：需要在仓库设置中启用 Dependabot security updates
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

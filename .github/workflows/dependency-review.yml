@@ -2,12 +2,14 @@ name: Dependency Review
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened]
     branches:
       - main
 
 permissions:
   contents: read
   pull-requests: write
+  security-events: read
 
 jobs:
   dependency-review:
@@ -15,10 +17,136 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Dependency Review
+        id: dep-review
+        continue-on-error: true
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
-          comment-summary-in-pr: true
-          # 可选配置示例：允许版本范围或预览版
-          # allow-licenses: MIT,Apache-2.0
+
+      - name: Get dependency review results and post comment
+        id: get-results
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const { data: diffRange } = await github.rest.dependencyGraph.diffRange({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
+              });
+
+              let commentBody = `## 🔍 依赖安全检查报告\n\n`;
+              commentBody += `**检查时间**: ${new Date().toISOString()}\n`;
+              commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
+
+              const vulnerabilities = diffRange.vulnerabilities || [];
+              const hasVulns = vulnerabilities.length > 0;
+
+              if (diffRange.change_type === 'removed') {
+                commentBody += `✅ **无依赖变更** - 本次提交未修改依赖项\n`;
+              } else {
+                if (vulnerabilities.length === 0) {
+                  commentBody += `✅ **未发现安全漏洞**\n\n`;
+                  commentBody += `本次依赖变更未引入已知的安全漏洞。\n`;
+                } else {
+                  commentBody += `⚠️ **发现 ${vulnerabilities.length} 个安全漏洞**\n\n`;
+                  
+                  const severityCounts = {};
+                  vulnerabilities.forEach(vuln => {
+                    const severity = vuln.severity || 'unknown';
+                    severityCounts[severity] = (severityCounts[severity] || 0) + 1;
+                  });
+
+                  commentBody += `### 漏洞统计\n`;
+                  Object.entries(severityCounts).forEach(([severity, count]) => {
+                    const emoji = severity === 'critical' ? '🔴' : severity === 'high' ? '🟠' : severity === 'moderate' ? '🟡' : '⚪';
+                    commentBody += `- ${emoji} **${severity.toUpperCase()}**: ${count} 个\n`;
+                  });
+
+                  commentBody += `\n### 详细漏洞列表\n\n`;
+                  vulnerabilities.forEach((vuln, index) => {
+                    const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
+                    commentBody += `${index + 1}. ${severityEmoji} **${vuln.package.name}@${vuln.package.version}**\n`;
+                    commentBody += `   - **严重程度**: ${vuln.severity || 'unknown'}\n`;
+                    if (vuln.advisory) {
+                      commentBody += `   - **CVE**: ${vuln.advisory.ghsa_id || vuln.advisory.cve_id || 'N/A'}\n`;
+                      commentBody += `   - **摘要**: ${vuln.advisory.summary || 'N/A'}\n`;
+                      if (vuln.advisory.cvss?.score) {
+                        commentBody += `   - **CVSS 分数**: ${vuln.advisory.cvss.score}\n`;
+                      }
+                    }
+                    if (vuln.first_patched_version) {
+                      commentBody += `   - **建议升级至**: ${vuln.first_patched_version.identifier || vuln.first_patched_version}\n`;
+                    }
+                    commentBody += `\n`;
+                  });
+                }
+
+                // 显示依赖变更
+                const changes = diffRange.changes || [];
+                if (changes.length > 0) {
+                  commentBody += `\n### 依赖变更\n\n`;
+                  changes.forEach(change => {
+                    const changeType = change.change_type === 'added' ? '➕' : change.change_type === 'removed' ? '➖' : '🔄';
+                    commentBody += `${changeType} **${change.manifest}**: ${change.name}@${change.version}\n`;
+                  });
+                }
+              }
+
+              commentBody += `\n---\n`;
+              commentBody += `*此报告由 GitHub Actions 自动生成，每次提交都会更新*\n`;
+
+              // 查找是否已有评论
+              const { data: comments } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+              });
+
+              const botComment = comments.find(comment => 
+                comment.user.type === 'Bot' && 
+                comment.body.includes('🔍 依赖安全检查报告')
+              );
+
+              if (botComment) {
+                // 更新现有评论
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: botComment.id,
+                  body: commentBody
+                });
+              } else {
+                // 创建新评论
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: commentBody
+                });
+              }
+
+              core.setOutput('has-vulnerabilities', hasVulns ? 'true' : 'false');
+            } catch (error) {
+              console.error('Error getting dependency review:', error);
+              // 如果 API 调用失败，至少创建一个基本评论
+              const errorComment = `## 🔍 依赖安全检查报告\n\n⚠️ **无法获取依赖审查详情**\n\n错误信息: ${error.message}\n\n请查看 GitHub Actions 日志获取更多信息。`;
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+                body: errorComment
+              });
+              core.setOutput('has-vulnerabilities', 'false');
+            }
+
+      - name: Fail if vulnerabilities found
+        if: steps.dep-review.outcome == 'failure' || steps.get-results.outputs.has-vulnerabilities == 'true'
+        run: |
+          echo "发现安全漏洞，请查看 PR 评论中的详细报告"
+          exit 1

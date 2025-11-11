@@ -25,7 +25,6 @@
         <module>module-service</module>
         <module>module-api</module>
     </modules>
-
     <properties>
         <java.version>17</java.version>
         <maven.compiler.source>17</maven.compiler.source>

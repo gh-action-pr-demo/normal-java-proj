@@ -33,13 +33,24 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            let commentBody = '';
+            let hasVulns = false;
+            
             try {
+              console.log('开始获取依赖审查信息...');
+              console.log(`Base SHA: ${context.payload.pull_request.base.sha}`);
+              console.log(`Head SHA: ${context.payload.pull_request.head.sha}`);
+              
               // 获取 PR 的依赖变更和新增漏洞
               const { data: diffRange } = await github.rest.dependencyGraph.diffRange({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
               });
+              
+              console.log('成功获取 diffRange 数据');
+              console.log(`Change type: ${diffRange.change_type}`);
+              console.log(`Vulnerabilities count: ${(diffRange.vulnerabilities || []).length}`);
 
               // 获取新增的漏洞（PR 引入的）
               const newVulnerabilities = diffRange.vulnerabilities || [];
@@ -236,12 +247,29 @@ jobs:
               commentBody += `\n---\n`;
               commentBody += `*此报告由 GitHub Actions 自动生成，每次提交都会更新*\n`;
 
+              // 确保 commentBody 不为空
+              if (!commentBody || commentBody.trim().length === 0) {
+                commentBody = `## 🔍 依赖安全检查报告\n\n⚠️ **无法生成报告内容**\n\n请查看 GitHub Actions 日志获取更多信息。\n\n---\n*此报告由 GitHub Actions 自动生成*\n`;
+              }
+
+              console.log('准备创建/更新评论...');
+              console.log(`评论内容长度: ${commentBody.length} 字符`);
+              console.log(`评论内容预览: ${commentBody.substring(0, 200)}...`);
+
               // 查找是否已有评论
-              const { data: comments } = await github.rest.issues.listComments({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
-              });
+              let comments;
+              try {
+                const response = await github.rest.issues.listComments({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                });
+                comments = response.data;
+                console.log(`找到 ${comments.length} 条评论`);
+              } catch (listError) {
+                console.error('获取评论列表失败:', listError);
+                throw listError;
+              }
 
               const botComment = comments.find(comment => 
                 comment.user.type === 'Bot' && 
@@ -249,34 +277,81 @@ jobs:
               );
 
               if (botComment) {
-                // 更新现有评论
-                await github.rest.issues.updateComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  comment_id: botComment.id,
-                  body: commentBody
-                });
+                console.log(`找到现有评论，ID: ${botComment.id}，准备更新`);
+                try {
+                  await github.rest.issues.updateComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: botComment.id,
+                    body: commentBody
+                  });
+                  console.log('评论更新成功');
+                } catch (updateError) {
+                  console.error('更新评论失败:', updateError);
+                  throw updateError;
+                }
               } else {
-                // 创建新评论
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: context.payload.pull_request.number,
-                  body: commentBody
-                });
+                console.log('未找到现有评论，创建新评论');
+                try {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.payload.pull_request.number,
+                    body: commentBody
+                  });
+                  console.log('评论创建成功');
+                } catch (createError) {
+                  console.error('创建评论失败:', createError);
+                  throw createError;
+                }
               }
 
               core.setOutput('has-vulnerabilities', hasVulns ? 'true' : 'false');
+              console.log(`设置输出: has-vulnerabilities=${hasVulns}`);
+              console.log('脚本执行完成');
             } catch (error) {
-              console.error('Error getting dependency review:', error);
+              console.error('获取依赖审查信息时出错:', error);
+              console.error('错误堆栈:', error.stack);
+              
               // 如果 API 调用失败，至少创建一个基本评论
-              const errorComment = `## 🔍 依赖安全检查报告\n\n⚠️ **无法获取依赖审查详情**\n\n错误信息: ${error.message}\n\n请查看 GitHub Actions 日志获取更多信息。`;
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.payload.pull_request.number,
-                body: errorComment
-              });
+              const errorComment = `## 🔍 依赖安全检查报告\n\n⚠️ **无法获取依赖审查详情**\n\n**错误信息**: \`${error.message}\`\n\n**错误类型**: ${error.name}\n\n请查看 GitHub Actions 日志获取更多信息。\n\n---\n*此报告由 GitHub Actions 自动生成*\n`;
+              
+              try {
+                // 查找是否已有评论
+                const { data: comments } = await github.rest.issues.listComments({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                });
+
+                const botComment = comments.find(comment => 
+                  comment.user.type === 'Bot' && 
+                  comment.body.includes('🔍 依赖安全检查报告')
+                );
+
+                if (botComment) {
+                  await github.rest.issues.updateComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    comment_id: botComment.id,
+                    body: errorComment
+                  });
+                  console.log('错误评论更新成功');
+                } else {
+                  await github.rest.issues.createComment({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issue_number: context.payload.pull_request.number,
+                    body: errorComment
+                  });
+                  console.log('错误评论创建成功');
+                }
+              } catch (commentError) {
+                console.error('创建错误评论时也失败了:', commentError);
+                // 如果连评论都创建不了，至少输出到日志
+                core.setFailed(`无法创建评论: ${commentError.message}`);
+              }
+              
               core.setOutput('has-vulnerabilities', 'false');
             }
 

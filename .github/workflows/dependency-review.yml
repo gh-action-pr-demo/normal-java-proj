@@ -194,7 +194,7 @@ jobs:
         with:
           fail-on-severity: high
           # 禁用自动评论，我们会在后续步骤中手动创建评论
-          comment-summary-in-pr: never
+          comment-summary-in-pr: always
 
       - name: Debug - Check dependencies
         if: steps.get-pr-number.outputs.is_pr == 'true' && steps.check-ignored.outputs.ignored != 'true'

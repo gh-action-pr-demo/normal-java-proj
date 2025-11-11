@@ -1,9 +1,9 @@
 name: Dependency Review
 
 on:
-  pull_request_target:
-    # 使用 pull_request_target 以便具备写权限向 PR 评论（含来自 fork 的 PR）
-    types: [opened, synchronize, reopened, edited, ready_for_review]
+  pull_request:
+    # 监听所有 PR 事件，确保在非默认分支也能触发
+    types: [opened, synchronize, reopened, edited, ready_for_review, labeled, unlabeled]
   issue_comment:
     types: [created, edited]
   workflow_dispatch:
@@ -112,7 +112,7 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
-          comment-summary-in-pr: false
+          comment-summary-in-pr: true
 
       - name: Post filtered summary comment
         if: startsWith(github.event_name, 'pull_request')

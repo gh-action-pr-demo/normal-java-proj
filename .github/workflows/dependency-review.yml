@@ -230,16 +230,7 @@ jobs:
               
               commentBody += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">📊 查看完整的依赖安全检查报告</a>\n\n`;
               
-              // 添加 @dependabot 命令说明
-              commentBody += `### 🤖 可用命令\n\n`;
-              commentBody += `你可以在 PR 评论中使用以下命令：\n\n`;
-              commentBody += `- \`@dependabot ignore\` 或 \`skip dependency check\` - **忽略这次依赖检查**\n`;
-              commentBody += `- \`@dependabot rebase\` - 重新基于最新代码\n`;
-              commentBody += `- \`@dependabot recreate\` - 重新创建此 PR\n`;
-              commentBody += `- \`@dependabot merge\` - 合并此 PR\n`;
-              commentBody += `- \`@dependabot close\` - 关闭此 PR\n\n`;
-              
-              commentBody += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。\n\n`;
+              commentBody += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。如需忽略这次检查，请在 PR 上添加 \`dependency-check-ignored\` 标签。\n\n`;
               commentBody += `---\n`;
               commentBody += `*此评论由 GitHub Actions 自动生成*\n`;
 

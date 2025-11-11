@@ -29,98 +29,94 @@ jobs:
 
       - name: Get dependency review results and post comment
         id: get-results
-        if: always()
+        if: steps.dep-review.outcome == 'failure'
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
-            const path = require('path');
-            
             let commentBody = '';
             let hasVulns = false;
             
             try {
-              console.log('开始获取依赖审查信息...');
+              console.log('检测到漏洞，开始获取详细的漏洞信息...');
               console.log(`Head SHA: ${context.payload.pull_request.head.sha}`);
               
-              // 方法1: 尝试读取 dependency-review-action 的输出文件
-              // dependency-review-action 可能会生成报告文件
               let allVulnerabilities = [];
               let dependencyChanges = [];
               
-              // 尝试从多个可能的位置读取报告
-              const possibleReportPaths = [
-                'dependency-review-results.sarif',
-                'dependency-review-summary.md',
-                '.github/dependency-review-results.json'
-              ];
-              
-              let reportFound = false;
-              for (const reportPath of possibleReportPaths) {
-                try {
-                  if (fs.existsSync(reportPath)) {
-                    console.log(`找到报告文件: ${reportPath}`);
-                    const reportContent = fs.readFileSync(reportPath, 'utf8');
-                    console.log(`报告文件内容长度: ${reportContent.length}`);
-                    // 这里可以根据实际文件格式解析
-                    reportFound = true;
-                    break;
-                  }
-                } catch (e) {
-                  console.log(`无法读取 ${reportPath}: ${e.message}`);
-                }
-              }
-              
-              // 方法2: 使用 GitHub Dependency Graph API 获取漏洞信息
-              if (!reportFound) {
-                console.log('未找到报告文件，使用 Dependency Graph API 获取漏洞信息...');
+              // 使用 GitHub Dependency Graph API 获取当前 head commit 的所有漏洞
+              try {
+                // 获取 head commit 信息
+                const { data: headCommit } = await github.rest.repos.getCommit({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: context.payload.pull_request.head.sha
+                });
                 
-                try {
-                  // 获取 head commit 信息
-                  const { data: headCommit } = await github.rest.repos.getCommit({
+                console.log(`Head commit 有 ${headCommit.parents.length} 个父 commit`);
+                
+                // 方法1: 获取 base 到 head 的完整对比，获取所有漏洞
+                const { data: prDiff } = await github.rest.dependencyGraph.diffRange({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
+                });
+                
+                console.log(`PR diff 返回的漏洞数量: ${(prDiff.vulnerabilities || []).length}`);
+                console.log(`PR diff 返回的变更数量: ${(prDiff.changes || []).length}`);
+                
+                allVulnerabilities = prDiff.vulnerabilities || [];
+                dependencyChanges = prDiff.changes || [];
+                
+                // 方法2: 如果 PR diff 没有返回漏洞，尝试获取 head commit 相对于其父 commit 的漏洞
+                // 这样可以获取 head commit 中所有存在的漏洞（不仅仅是新增的）
+                if (allVulnerabilities.length === 0 && headCommit.parents && headCommit.parents.length > 0) {
+                  console.log('PR diff 未返回漏洞，尝试获取 head commit 相对于父 commit 的漏洞...');
+                  const parentSha = headCommit.parents[0].sha;
+                  const { data: headDiff } = await github.rest.dependencyGraph.diffRange({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
-                    ref: context.payload.pull_request.head.sha
+                    basehead: `${parentSha}...${context.payload.pull_request.head.sha}`
                   });
                   
-                  console.log(`Head commit 有 ${headCommit.parents.length} 个父 commit`);
+                  allVulnerabilities = headDiff.vulnerabilities || [];
+                  dependencyChanges = headDiff.changes || [];
+                  console.log(`Head diff 返回的漏洞数量: ${allVulnerabilities.length}`);
+                }
+                
+                // 方法3: 如果还是没有漏洞，尝试获取 base commit 的漏洞（已存在的漏洞）
+                if (allVulnerabilities.length === 0 && headCommit.parents && headCommit.parents.length > 0) {
+                  console.log('尝试获取 base commit 的漏洞（已存在的漏洞）...');
+                  const parentSha = headCommit.parents[0].sha;
                   
-                  // 获取 base 到 head 的完整对比，获取所有漏洞
-                  const { data: prDiff } = await github.rest.dependencyGraph.diffRange({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
-                  });
-                  
-                  console.log(`PR diff 返回的漏洞数量: ${(prDiff.vulnerabilities || []).length}`);
-                  console.log(`PR diff 返回的变更数量: ${(prDiff.changes || []).length}`);
-                  
-                  // 获取所有漏洞
-                  allVulnerabilities = prDiff.vulnerabilities || [];
-                  dependencyChanges = prDiff.changes || [];
-                  
-                  // 如果 PR diff 没有返回漏洞，尝试获取 head commit 相对于其父 commit 的漏洞
-                  if (allVulnerabilities.length === 0 && headCommit.parents && headCommit.parents.length > 0) {
-                    console.log('PR diff 未返回漏洞，尝试获取 head commit 的漏洞...');
-                    const parentSha = headCommit.parents[0].sha;
-                    const { data: headDiff } = await github.rest.dependencyGraph.diffRange({
+                  // 获取 base commit 的父 commit
+                  try {
+                    const { data: baseCommit } = await github.rest.repos.getCommit({
                       owner: context.repo.owner,
                       repo: context.repo.repo,
-                      basehead: `${parentSha}...${context.payload.pull_request.head.sha}`
+                      ref: context.payload.pull_request.base.sha
                     });
                     
-                    allVulnerabilities = headDiff.vulnerabilities || [];
-                    dependencyChanges = headDiff.changes || [];
-                    console.log(`Head diff 返回的漏洞数量: ${allVulnerabilities.length}`);
+                    if (baseCommit.parents && baseCommit.parents.length > 0) {
+                      const baseParentSha = baseCommit.parents[0].sha;
+                      const { data: baseDiff } = await github.rest.dependencyGraph.diffRange({
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        basehead: `${baseParentSha}...${context.payload.pull_request.base.sha}`
+                      });
+                      
+                      allVulnerabilities = baseDiff.vulnerabilities || [];
+                      dependencyChanges = baseDiff.changes || [];
+                      console.log(`Base diff 返回的漏洞数量: ${allVulnerabilities.length}`);
+                    }
+                  } catch (baseError) {
+                    console.log('无法获取 base commit 的漏洞:', baseError.message);
                   }
-                  
-                } catch (apiError) {
-                  console.error('Dependency Graph API 调用失败:', apiError);
-                  console.error('错误详情:', apiError.message);
-                  // 不抛出错误，继续执行，至少显示空报告
-                  allVulnerabilities = [];
-                  dependencyChanges = [];
                 }
+                
+              } catch (apiError) {
+                console.error('Dependency Graph API 调用失败:', apiError);
+                console.error('错误详情:', apiError.message);
+                throw apiError;
               }
               
               console.log(`最终获取到的漏洞数量: ${allVulnerabilities.length}`);
@@ -336,7 +332,7 @@ jobs:
             }
 
       - name: Fail if vulnerabilities found
-        if: steps.dep-review.outcome == 'failure' || steps.get-results.outputs.has-vulnerabilities == 'true'
+        if: steps.dep-review.outcome == 'failure'
         run: |
           echo "发现安全漏洞，请查看 PR 评论中的详细报告"
           exit 1

@@ -27,10 +27,14 @@ jobs:
             if (context.eventName === 'issues') {
               // 从 issues.labeled/unlabeled 事件获取 PR 号
               // 只在添加或移除 dependency-check-ignore 标签时触发
-              const labelName = context.payload.label.name;
+              const labelName = context.payload.label?.name;
               const action = context.payload.action; // 'labeled' 或 'unlabeled'
               
-              console.log(`检测到标签事件: ${action}, 标签名称: ${labelName}`);
+              console.log(`=== 标签事件触发 ===`);
+              console.log(`事件类型: ${context.eventName}`);
+              console.log(`动作: ${action}`);
+              console.log(`标签名称: ${labelName}`);
+              console.log(`Issue Number: ${context.payload.issue?.number}`);
               
               if (labelName !== 'dependency-check-ignore') {
                 console.log(`标签 ${labelName} 不是 dependency-check-ignore，跳过`);
@@ -189,10 +193,11 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
-          # 显示所有漏洞，不仅仅是新引入的
-          comment-summary-in-pr: always
+          # 禁用自动评论，我们会在后续步骤中手动创建评论
+          comment-summary-in-pr: never
 
       - name: Debug - Check dependencies
+        if: steps.get-pr-number.outputs.is_pr == 'true' && steps.check-ignored.outputs.ignored != 'true'
         run: |
           echo "=== 检查 pom.xml 文件 ==="
           find . -name "pom.xml" -type f
@@ -209,8 +214,8 @@ jobs:
 
       - name: Get dependency review results and post comment
         id: get-results
-        # 无论是否失败都执行，以便显示所有漏洞信息
-        if: always()
+        # 只在没有忽略标签时执行，如果有标签则跳过（因为已经在 Skip if ignored 步骤中处理了）
+        if: steps.get-pr-number.outputs.is_pr == 'true' && steps.check-ignored.outputs.ignored != 'true'
         uses: actions/github-script@v7
         with:
           script: |
@@ -223,6 +228,21 @@ jobs:
                 repo: context.repo.repo,
                 pull_number: parseInt(prNumber)
               });
+              
+              // 检查是否有忽略标签（双重检查，确保不会在有标签时执行）
+              const { data: issue } = await github.rest.issues.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: parseInt(prNumber)
+              });
+              
+              const labels = issue.labels.map(l => l.name);
+              const isIgnored = labels.includes('dependency-check-ignore');
+              
+              if (isIgnored) {
+                console.log('检测到忽略标签，跳过评论创建（应该在 Skip if ignored 步骤中已处理）');
+                return;
+              }
               
               const depReviewOutcome = '${{ steps.dep-review.outcome }}';
               const hasVulnerabilities = depReviewOutcome === 'failure';

@@ -33,259 +33,39 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            let commentBody = '';
-            let hasVulns = false;
-            
             try {
-              console.log('检测到漏洞，开始获取详细的漏洞信息...');
+              console.log('检测到漏洞，开始生成报告...');
               console.log(`Head SHA: ${context.payload.pull_request.head.sha}`);
+              console.log(`Run ID: ${context.runId}`);
               
-              let allVulnerabilities = [];
-              let dependencyChanges = [];
+              // 构建 Actions summary 页面链接
+              const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
               
-              // 使用 GitHub Security API 获取当前仓库的所有漏洞警报
-              try {
-                console.log('使用 Dependabot API 获取所有漏洞警报...');
-                
-                // 获取当前仓库的所有 Dependabot alerts（开放状态的）
-                const { data: alerts } = await github.rest.dependabot.listAlertsForRepo({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  state: 'open'
-                });
-                
-                console.log(`获取到 ${alerts.length} 个 Dependabot alerts`);
-                
-                // 将 alerts 转换为漏洞格式
-                allVulnerabilities = alerts.map(alert => ({
-                  package: {
-                    name: alert.dependency?.package?.name || 'unknown',
-                    version: alert.dependency?.version || 'unknown',
-                    ecosystem: alert.dependency?.package?.ecosystem || 'maven'
-                  },
-                  severity: alert.security_vulnerability?.severity || 'unknown',
-                  advisory: {
-                    ghsa_id: alert.security_advisory?.ghsa_id,
-                    cve_id: alert.security_advisory?.cve_id,
-                    summary: alert.security_advisory?.summary,
-                    cvss: {
-                      score: alert.security_vulnerability?.cvss?.score
-                    }
-                  },
-                  first_patched_version: alert.security_vulnerability?.first_patched_version ? {
-                    identifier: alert.security_vulnerability.first_patched_version.identifier
-                  } : null
-                }));
-                
-                console.log(`转换后的漏洞数量: ${allVulnerabilities.length}`);
-                
-                // 获取依赖变更信息（用于显示许可证信息）
-                try {
-                  const { data: prDiff } = await github.rest.dependencyGraph.diffRange({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
-                  });
-                  
-                  dependencyChanges = prDiff.changes || [];
-                  console.log(`依赖变更数量: ${dependencyChanges.length}`);
-                } catch (diffError) {
-                  console.log('无法获取依赖变更信息:', diffError.message);
-                  dependencyChanges = [];
-                }
-                
-              } catch (apiError) {
-                console.error('Dependabot API 调用失败:', apiError);
-                console.error('错误详情:', apiError.message);
-                console.log('尝试使用 Dependency Graph API 作为备选方案...');
-                
-                // 备选方案：使用 Dependency Graph API
-                try {
-                  const { data: prDiff } = await github.rest.dependencyGraph.diffRange({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
-                  });
-                  
-                  allVulnerabilities = prDiff.vulnerabilities || [];
-                  dependencyChanges = prDiff.changes || [];
-                  console.log(`Dependency Graph API 返回的漏洞数量: ${allVulnerabilities.length}`);
-                } catch (diffError) {
-                  console.error('Dependency Graph API 也失败:', diffError);
-                  // 如果都失败了，至少显示空报告
-                  allVulnerabilities = [];
-                  dependencyChanges = [];
-                }
-              }
+              // dependency-review-action 已经在 summary 中显示了详细的检查报告
+              // 我们只需要在 PR 评论中添加指向 summary 的链接
               
-              console.log(`最终获取到的漏洞数量: ${allVulnerabilities.length}`);
-              console.log(`依赖变更数量: ${dependencyChanges.length}`);
-              
-              // 统计漏洞包（去重）
-              const vulnerablePackages = new Set();
-              allVulnerabilities.forEach(vuln => {
-                vulnerablePackages.add(`${vuln.package.name}@${vuln.package.version}`);
-              });
-
-              const hasVulns = allVulnerabilities.length > 0;
-              
-              // 获取依赖变更和许可证信息
-              const changes = dependencyChanges || [];
-              
-              // 统计许可证问题
-              let incompatibleLicenses = 0;
-              let invalidSpdxLicenses = 0;
-              let unknownLicenses = 0;
-              const licenseDetails = [];
-              
-              changes.forEach(change => {
-                if (change.change_type === 'added') {
-                  // 检查许可证信息
-                  if (change.license) {
-                    if (change.license === 'UNKNOWN' || !change.license) {
-                      unknownLicenses++;
-                      licenseDetails.push({
-                        name: change.name,
-                        version: change.version,
-                        manifest: change.manifest,
-                        license: change.license || 'UNKNOWN',
-                        type: 'unknown'
-                      });
-                    }
-                  } else {
-                    unknownLicenses++;
-                    licenseDetails.push({
-                      name: change.name,
-                      version: change.version,
-                      manifest: change.manifest,
-                      license: 'UNKNOWN',
-                      type: 'unknown'
-                    });
-                  }
-                }
-              });
-
-              // 格式化报告
-              let commentBody = `## Dependency Review\n\n`;
+              // 创建评论内容，包含指向 Actions summary 的链接
+              let commentBody = `## 🔍 Dependency Review\n\n`;
+              commentBody += `⚠️ **检测到安全漏洞**\n\n`;
               commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n`;
               commentBody += `**检查时间**: ${new Date().toISOString()}\n\n`;
               
-              commentBody += `The following issues were found:\n\n`;
+              commentBody += `### 📋 详细检查报告\n\n`;
+              commentBody += `\`dependency-review-action\` 已经在 GitHub Actions 的 summary 页面生成了详细的检查报告。\n\n`;
+              commentBody += `👉 **[查看完整的依赖安全检查报告](${summaryUrl})**\n\n`;
               
-              // 漏洞统计
-              if (vulnerablePackages.size > 0) {
-                commentBody += `❌ ${vulnerablePackages.size} vulnerable package(s)\n`;
-              } else {
-                commentBody += `✅ 0 vulnerable package(s)\n`;
-              }
+              commentBody += `报告包含以下信息：\n`;
+              commentBody += `- ❌ 漏洞包统计\n`;
+              commentBody += `- ✅ 许可证兼容性检查\n`;
+              commentBody += `- 📦 依赖变更详情\n`;
+              commentBody += `- 🔍 每个漏洞的详细信息（CVE、严重程度、修复版本等）\n\n`;
               
-              // 许可证统计
-              if (incompatibleLicenses > 0) {
-                commentBody += `❌ ${incompatibleLicenses} package(s) with incompatible licenses\n`;
-              } else {
-                commentBody += `✅ 0 package(s) with incompatible licenses\n`;
-              }
-              
-              if (invalidSpdxLicenses > 0) {
-                commentBody += `❌ ${invalidSpdxLicenses} package(s) with invalid SPDX license definitions\n`;
-              } else {
-                commentBody += `✅ 0 package(s) with invalid SPDX license definitions\n`;
-              }
-              
-              if (unknownLicenses > 0) {
-                commentBody += `⚠️ ${unknownLicenses} package(s) with unknown licenses.\n`;
-              } else {
-                commentBody += `✅ 0 package(s) with unknown licenses.\n`;
-              }
-
-              // 显示详细漏洞列表
-              if (hasVulns) {
-                commentBody += `\n### Vulnerable Packages\n\n`;
-                
-                // 按包分组漏洞
-                const vulnByPackage = {};
-                allVulnerabilities.forEach(vuln => {
-                  const pkgKey = `${vuln.package.name}@${vuln.package.version}`;
-                  if (!vulnByPackage[pkgKey]) {
-                    vulnByPackage[pkgKey] = {
-                      name: vuln.package.name,
-                      version: vuln.package.version,
-                      ecosystem: vuln.package.ecosystem || 'maven',
-                      vulnerabilities: []
-                    };
-                  }
-                  vulnByPackage[pkgKey].vulnerabilities.push(vuln);
-                });
-
-                Object.values(vulnByPackage).forEach((pkg, index) => {
-                  commentBody += `${index + 1}. **${pkg.name}@${pkg.version}**\n`;
-                  commentBody += `   - **Ecosystem**: ${pkg.ecosystem}\n`;
-                  commentBody += `   - **Vulnerabilities**: ${pkg.vulnerabilities.length}\n\n`;
-                  
-                  pkg.vulnerabilities.forEach((vuln, vulnIndex) => {
-                    const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
-                    commentBody += `   ${vulnIndex + 1}. ${severityEmoji} **${vuln.severity || 'unknown'}** severity\n`;
-                    
-                    if (vuln.advisory) {
-                      const advisoryId = vuln.advisory.ghsa_id || vuln.advisory.cve_id || 'N/A';
-                      commentBody += `      - **Advisory**: ${advisoryId}\n`;
-                      if (vuln.advisory.summary) {
-                        commentBody += `      - **Summary**: ${vuln.advisory.summary}\n`;
-                      }
-                      if (vuln.advisory.cvss?.score) {
-                        commentBody += `      - **CVSS Score**: ${vuln.advisory.cvss.score}\n`;
-                      }
-                    }
-                    
-                    if (vuln.first_patched_version) {
-                      const patchedVersion = vuln.first_patched_version.identifier || vuln.first_patched_version;
-                      commentBody += `      - **Patched Version**: ${patchedVersion}\n`;
-                    }
-                    
-                    commentBody += `\n`;
-                  });
-                });
-              }
-
-              // 显示许可证详情
-              if (licenseDetails.length > 0) {
-                commentBody += `\n### Packages with Unknown Licenses\n\n`;
-                licenseDetails.forEach((pkg, index) => {
-                  commentBody += `${index + 1}. **${pkg.name}@${pkg.version}**\n`;
-                  commentBody += `   - **Manifest**: ${pkg.manifest}\n`;
-                  commentBody += `   - **License**: ${pkg.license}\n\n`;
-                });
-              }
-
-              // 显示依赖变更摘要
-              if (changes.length > 0) {
-                commentBody += `\n### Dependency Changes\n\n`;
-                const added = changes.filter(c => c.change_type === 'added').length;
-                const removed = changes.filter(c => c.change_type === 'removed').length;
-                const updated = changes.filter(c => c.change_type === 'updated').length;
-                
-                if (added > 0) commentBody += `➕ Added: ${added}\n`;
-                if (removed > 0) commentBody += `➖ Removed: ${removed}\n`;
-                if (updated > 0) commentBody += `🔄 Updated: ${updated}\n`;
-                
-                commentBody += `\n<details>\n<summary>View all changes</summary>\n\n`;
-                changes.forEach(change => {
-                  const changeTypeEmoji = change.change_type === 'added' ? '➕' : change.change_type === 'removed' ? '➖' : '🔄';
-                  commentBody += `${changeTypeEmoji} **${change.manifest}**: ${change.name}@${change.version}\n`;
-                });
-                commentBody += `\n</details>\n`;
-              }
-
-              commentBody += `\n---\n`;
-              commentBody += `*此报告由 GitHub Actions 自动生成，每次提交都会更新*\n`;
-
-              // 确保 commentBody 不为空
-              if (!commentBody || commentBody.trim().length === 0) {
-                commentBody = `## 🔍 依赖安全检查报告\n\n⚠️ **无法生成报告内容**\n\n请查看 GitHub Actions 日志获取更多信息。\n\n---\n*此报告由 GitHub Actions 自动生成*\n`;
-              }
+              commentBody += `---\n`;
+              commentBody += `*此评论由 GitHub Actions 自动生成，每次检测到漏洞时都会更新*\n`;
 
               console.log('准备创建新评论...');
               console.log(`评论内容长度: ${commentBody.length} 字符`);
+              console.log(`Summary URL: ${summaryUrl}`);
               console.log(`评论内容预览: ${commentBody.substring(0, 200)}...`);
 
               // 每次都创建新评论，不更新现有评论
@@ -302,15 +82,24 @@ jobs:
                 throw createError;
               }
 
-              core.setOutput('has-vulnerabilities', hasVulns ? 'true' : 'false');
-              console.log(`设置输出: has-vulnerabilities=${hasVulns}`);
+              // 由于检测到漏洞，设置输出
+              core.setOutput('has-vulnerabilities', 'true');
               console.log('脚本执行完成');
             } catch (error) {
-              console.error('获取依赖审查信息时出错:', error);
+              console.error('生成报告时出错:', error);
               console.error('错误堆栈:', error.stack);
               
-              // 如果 API 调用失败，至少创建一个基本评论
-              const errorComment = `## 🔍 依赖安全检查报告\n\n⚠️ **无法获取依赖审查详情**\n\n**错误信息**: \`${error.message}\`\n\n**错误类型**: ${error.name}\n\n请查看 GitHub Actions 日志获取更多信息。\n\n---\n*此报告由 GitHub Actions 自动生成*\n`;
+              // 构建 Actions summary 页面链接
+              const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+              
+              // 即使出错，也创建一个包含 summary 链接的评论
+              let errorComment = `## 🔍 Dependency Review\n\n⚠️ **检测到安全漏洞**\n\n**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
+              errorComment += `### 📋 详细检查报告\n\n`;
+              errorComment += `\`dependency-review-action\` 已经在 GitHub Actions 的 summary 页面生成了详细的检查报告。\n\n`;
+              errorComment += `👉 **[查看完整的依赖安全检查报告](${summaryUrl})**\n\n`;
+              errorComment += `**注意**: 生成评论时遇到错误: \`${error.message}\`\n\n`;
+              errorComment += `---\n`;
+              errorComment += `*此评论由 GitHub Actions 自动生成*\n`;
               
               try {
                 // 创建新评论（不更新现有评论）
@@ -327,7 +116,7 @@ jobs:
                 core.setFailed(`无法创建评论: ${commentError.message}`);
               }
               
-              core.setOutput('has-vulnerabilities', 'false');
+              core.setOutput('has-vulnerabilities', 'true');
             }
 
       - name: Fail if vulnerabilities found

@@ -14,6 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
+      - name: Init PR context
+        id: ctx
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            core.setOutput('prNumber', String(pr.number));
+            core.setOutput('baseSha', pr.base.sha);
+            core.setOutput('headSha', pr.head.sha);
       - name: Check skip keywords in PR comments
         id: skipchk
         uses: actions/github-script@v7
@@ -44,7 +53,7 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
+              issue_number: Number("${{ steps.ctx.outputs.prNumber }}"),
               body: "✅ 已根据评论关键字跳过依赖变更审查（Dependency Review）。"
             });
 
@@ -57,6 +66,54 @@ jobs:
         with:
           fail-on-severity: high
           comment-summary-in-pr: true
+
+      - name: Post dependency diff summary to PR
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const base = "${{ steps.ctx.outputs.baseSha }}";
+            const head = "${{ steps.ctx.outputs.headSha }}";
+            let lines = [];
+            try {
+              const res = await github.request('GET /repos/{owner}/{repo}/dependency-graph/compare/{basehead}', {
+                owner,
+                repo,
+                basehead: `${base}...${head}`,
+                headers: { 'X-GitHub-Api-Version': '2022-11-28' }
+              });
+              const diff = res.data || {};
+              const changes = diff.change_type ? [diff] : (diff.changed_manifests || []);
+              if (Array.isArray(changes) && changes.length > 0) {
+                lines.push('### Dependency Review 摘要');
+                for (const ch of changes) {
+                  const manifest = ch.manifest || ch.name || '';
+                  const vulns = ch.vulnerabilities || ch.advisories || [];
+                  if (vulns.length > 0) {
+                    lines.push(`- ${manifest}: 检测到 ${vulns.length} 条风险`);
+                    for (const v of vulns.slice(0, 20)) {
+                      const sev = v.severity || v.cvss_severity || v.database_specific?.severity || 'unknown';
+                      const pkg = v.package?.name || v.dependency?.package || '';
+                      const adv = v.ghsa_id || v.advisory_ghsa_id || v.advisory_id || '';
+                      lines.push(`  - ${pkg} | 严重级别: ${sev} | ${adv}`);
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              lines.push('ℹ️ 无法通过 API 获取依赖差异摘要，已退回官方评论。');
+            }
+            if (lines.length === 0) {
+              lines.push('✅ Dependency Review 已完成，未获取到可用摘要或无风险。详情见本次检查的官方评论与日志。');
+            }
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: Number("${{ steps.ctx.outputs.prNumber }}"),
+              body: lines.join('\n')
+            });
 
       - name: Post filtered summary comment
         if: startsWith(github.event_name, 'pull_request')

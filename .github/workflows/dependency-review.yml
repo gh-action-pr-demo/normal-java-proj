@@ -193,7 +193,6 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
-          # 禁用自动评论，我们会在后续步骤中手动创建评论
           comment-summary-in-pr: always
 
       - name: Debug - Check dependencies

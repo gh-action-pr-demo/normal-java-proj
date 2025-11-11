@@ -37,14 +37,8 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
-          deny-licenses: []
-          deny-ghsas: []
           # 显示所有漏洞，不仅仅是新引入的
           comment-summary-in-pr: always
-          # 允许所有许可证（只检查安全漏洞）
-          allow-licenses: []
-          # 允许所有 GHSA（只检查漏洞，不阻止）
-          allow-ghsas: []
 
       - name: Debug - Check dependencies
         run: |

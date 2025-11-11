@@ -49,8 +49,9 @@ jobs:
               });
               
               console.log('成功获取 diffRange 数据');
-              console.log(`Change type: ${diffRange.change_type}`);
+              console.log(`Change type: ${diffRange.change_type || 'undefined'}`);
               console.log(`Vulnerabilities count: ${(diffRange.vulnerabilities || []).length}`);
+              console.log(`Changes count: ${(diffRange.changes || []).length}`);
 
               // 获取新增的漏洞（PR 引入的）
               const newVulnerabilities = diffRange.vulnerabilities || [];
@@ -73,6 +74,7 @@ jobs:
                     basehead: `${parentSha}...${context.payload.pull_request.head.sha}`
                   });
                   allHeadVulnerabilities = headDiff.vulnerabilities || [];
+                  console.log(`Head 分支所有漏洞数量: ${allHeadVulnerabilities.length}`);
                 }
               } catch (e) {
                 console.log('无法获取 head 分支完整漏洞信息:', e.message);
@@ -92,6 +94,7 @@ jobs:
                       basehead: `${parentSha}...${context.payload.pull_request.base.sha}`
                     });
                     allHeadVulnerabilities = baseDiff.vulnerabilities || [];
+                    console.log(`Base 分支漏洞数量: ${allHeadVulnerabilities.length}`);
                   }
                 } catch (e2) {
                   console.log('无法获取 base 分支漏洞信息:', e2.message);
@@ -107,13 +110,18 @@ jobs:
                 return !newVulnKeys.has(key);
               });
 
+              console.log(`新增漏洞数量: ${newVulnerabilities.length}`);
+              console.log(`已存在漏洞数量: ${existingVulnerabilities.length}`);
+
               const hasNewVulns = newVulnerabilities.length > 0;
               const hasExistingVulns = existingVulnerabilities.length > 0;
               const hasVulns = hasNewVulns || hasExistingVulns;
+              const changeType = diffRange.change_type || 'unknown';
 
               let commentBody = `## 🔍 依赖安全检查报告\n\n`;
               commentBody += `**检查时间**: ${new Date().toISOString()}\n`;
-              commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
+              commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n`;
+              commentBody += `**变更类型**: ${changeType}\n\n`;
 
               // 显示新增漏洞
               if (hasNewVulns) {
@@ -148,7 +156,7 @@ jobs:
                   }
                   commentBody += `\n`;
                 });
-              } else if (diffRange.change_type !== 'removed') {
+              } else {
                 commentBody += `✅ **本次 PR 未引入新的安全漏洞**\n\n`;
               }
 
@@ -186,7 +194,7 @@ jobs:
                   }
                   commentBody += `\n`;
                 });
-              } else if (!hasNewVulns && diffRange.change_type !== 'removed') {
+              } else {
                 commentBody += `\n✅ **代码库中未发现已存在的安全漏洞**\n\n`;
               }
 
@@ -195,53 +203,9 @@ jobs:
               if (changes.length > 0) {
                 commentBody += `\n### 📦 依赖变更\n\n`;
                 changes.forEach(change => {
-                  const changeType = change.change_type === 'added' ? '➕' : change.change_type === 'removed' ? '➖' : '🔄';
-                  commentBody += `${changeType} **${change.manifest}**: ${change.name}@${change.version}\n`;
+                  const changeTypeEmoji = change.change_type === 'added' ? '➕' : change.change_type === 'removed' ? '➖' : '🔄';
+                  commentBody += `${changeTypeEmoji} **${change.manifest}**: ${change.name}@${change.version}\n`;
                 });
-              }
-
-              if (diffRange.change_type === 'removed') {
-                commentBody = `## 🔍 依赖安全检查报告\n\n`;
-                commentBody += `**检查时间**: ${new Date().toISOString()}\n`;
-                commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
-                commentBody += `✅ **无依赖变更** - 本次提交未修改依赖项\n`;
-                
-                if (hasExistingVulns) {
-                  commentBody += `\n### 📋 代码库中已存在的未修复漏洞 (${existingVulnerabilities.length} 个)\n\n`;
-                  commentBody += `*这些漏洞在本次 PR 之前就已存在，建议尽快修复*\n\n`;
-                  
-                  const existingSeverityCounts = {};
-                  existingVulnerabilities.forEach(vuln => {
-                    const severity = vuln.severity || 'unknown';
-                    existingSeverityCounts[severity] = (existingSeverityCounts[severity] || 0) + 1;
-                  });
-
-                  commentBody += `**漏洞统计**:\n`;
-                  Object.entries(existingSeverityCounts).forEach(([severity, count]) => {
-                    const emoji = severity === 'critical' ? '🔴' : severity === 'high' ? '🟠' : severity === 'moderate' ? '🟡' : '⚪';
-                    commentBody += `- ${emoji} **${severity.toUpperCase()}**: ${count} 个\n`;
-                  });
-
-                  commentBody += `\n**详细列表**:\n\n`;
-                  existingVulnerabilities.forEach((vuln, index) => {
-                    const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
-                    commentBody += `${index + 1}. ${severityEmoji} **${vuln.package.name}@${vuln.package.version}**\n`;
-                    commentBody += `   - **严重程度**: ${vuln.severity || 'unknown'}\n`;
-                    if (vuln.advisory) {
-                      commentBody += `   - **CVE**: ${vuln.advisory.ghsa_id || vuln.advisory.cve_id || 'N/A'}\n`;
-                      commentBody += `   - **摘要**: ${vuln.advisory.summary || 'N/A'}\n`;
-                      if (vuln.advisory.cvss?.score) {
-                        commentBody += `   - **CVSS 分数**: ${vuln.advisory.cvss.score}\n`;
-                      }
-                    }
-                    if (vuln.first_patched_version) {
-                      commentBody += `   - **建议升级至**: ${vuln.first_patched_version.identifier || vuln.first_patched_version}\n`;
-                    }
-                    commentBody += `\n`;
-                  });
-                } else {
-                  commentBody += `\n✅ **代码库中未发现已存在的安全漏洞**\n\n`;
-                }
               }
 
               commentBody += `\n---\n`;
@@ -252,58 +216,22 @@ jobs:
                 commentBody = `## 🔍 依赖安全检查报告\n\n⚠️ **无法生成报告内容**\n\n请查看 GitHub Actions 日志获取更多信息。\n\n---\n*此报告由 GitHub Actions 自动生成*\n`;
               }
 
-              console.log('准备创建/更新评论...');
+              console.log('准备创建新评论...');
               console.log(`评论内容长度: ${commentBody.length} 字符`);
               console.log(`评论内容预览: ${commentBody.substring(0, 200)}...`);
 
-              // 查找是否已有评论
-              let comments;
+              // 每次都创建新评论，不更新现有评论
               try {
-                const response = await github.rest.issues.listComments({
+                await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: context.payload.pull_request.number,
+                  body: commentBody
                 });
-                comments = response.data;
-                console.log(`找到 ${comments.length} 条评论`);
-              } catch (listError) {
-                console.error('获取评论列表失败:', listError);
-                throw listError;
-              }
-
-              const botComment = comments.find(comment => 
-                comment.user.type === 'Bot' && 
-                comment.body.includes('🔍 依赖安全检查报告')
-              );
-
-              if (botComment) {
-                console.log(`找到现有评论，ID: ${botComment.id}，准备更新`);
-                try {
-                  await github.rest.issues.updateComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    comment_id: botComment.id,
-                    body: commentBody
-                  });
-                  console.log('评论更新成功');
-                } catch (updateError) {
-                  console.error('更新评论失败:', updateError);
-                  throw updateError;
-                }
-              } else {
-                console.log('未找到现有评论，创建新评论');
-                try {
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: context.payload.pull_request.number,
-                    body: commentBody
-                  });
-                  console.log('评论创建成功');
-                } catch (createError) {
-                  console.error('创建评论失败:', createError);
-                  throw createError;
-                }
+                console.log('新评论创建成功');
+              } catch (createError) {
+                console.error('创建评论失败:', createError);
+                throw createError;
               }
 
               core.setOutput('has-vulnerabilities', hasVulns ? 'true' : 'false');
@@ -317,35 +245,14 @@ jobs:
               const errorComment = `## 🔍 依赖安全检查报告\n\n⚠️ **无法获取依赖审查详情**\n\n**错误信息**: \`${error.message}\`\n\n**错误类型**: ${error.name}\n\n请查看 GitHub Actions 日志获取更多信息。\n\n---\n*此报告由 GitHub Actions 自动生成*\n`;
               
               try {
-                // 查找是否已有评论
-                const { data: comments } = await github.rest.issues.listComments({
+                // 创建新评论（不更新现有评论）
+                await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: context.payload.pull_request.number,
+                  body: errorComment
                 });
-
-                const botComment = comments.find(comment => 
-                  comment.user.type === 'Bot' && 
-                  comment.body.includes('🔍 依赖安全检查报告')
-                );
-
-                if (botComment) {
-                  await github.rest.issues.updateComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    comment_id: botComment.id,
-                    body: errorComment
-                  });
-                  console.log('错误评论更新成功');
-                } else {
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: context.payload.pull_request.number,
-                    body: errorComment
-                  });
-                  console.log('错误评论创建成功');
-                }
+                console.log('错误评论创建成功');
               } catch (commentError) {
                 console.error('创建错误评论时也失败了:', commentError);
                 // 如果连评论都创建不了，至少输出到日志

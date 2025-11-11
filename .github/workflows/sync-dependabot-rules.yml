@@ -3,7 +3,6 @@ name: Sync Dependabot Rules
 on:
   push:
     paths:
-      - '.github/dependabot-rules.yml'
       - '.github/allow-deps.txt'
       - '.github/ignore-deps.txt'
   workflow_dispatch:

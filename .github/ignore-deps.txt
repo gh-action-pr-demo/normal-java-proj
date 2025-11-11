@@ -1,7 +1,0 @@
-# 一行一个依赖；默认 maven。也可显式前缀：maven: / gradle: / github-actions:
-# 例：maven:log4j:log4j
-# 例：gradle:org.apache.commons:commons-lang3
-maven:log4j:log4j
-maven:commons-io:commons-io
-
-

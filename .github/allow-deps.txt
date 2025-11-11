@@ -1,7 +1,0 @@
-# 一行一个依赖；默认 maven。也可显式前缀：maven: / gradle: / github-actions:
-# 例：maven:com.fasterxml.jackson.core:jackson-databind
-# 例：github-actions:actions/checkout
-maven:com.fasterxml.jackson.core:jackson-databind
-maven:com.google.guava:guava
-
-

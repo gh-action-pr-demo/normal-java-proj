@@ -1,0 +1,223 @@
+name: Dependabot Commands Handler
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  handle-dependabot-commands:
+    # 只在 PR 评论中触发，且评论包含 @dependabot
+    if: |
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@dependabot')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Parse command and execute
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const commentBody = context.payload.comment.body.toLowerCase();
+            const prNumber = context.payload.issue.number;
+            const prOwner = context.repo.owner;
+            const prRepo = context.repo.repo;
+            
+            console.log(`处理 PR #${prNumber} 的评论: ${commentBody}`);
+            
+            // 获取 PR 信息
+            const { data: pr } = await github.rest.pulls.get({
+              owner: prOwner,
+              repo: prRepo,
+              pull_number: prNumber
+            });
+            
+            // 检查是否是 Dependabot 创建的 PR 或包含漏洞的 PR
+            const isDependabotPR = pr.user.login === 'dependabot[bot]';
+            const prTitle = pr.title.toLowerCase();
+            const isSecurityPR = prTitle.includes('security') || prTitle.includes('vulnerability') || prTitle.includes('fix');
+            
+            // 解析命令
+            let command = null;
+            if (commentBody.includes('@dependabot rebase')) {
+              command = 'rebase';
+            } else if (commentBody.includes('@dependabot recreate')) {
+              command = 'recreate';
+            } else if (commentBody.includes('@dependabot merge')) {
+              command = 'merge';
+            } else if (commentBody.includes('@dependabot close')) {
+              command = 'close';
+            } else if (commentBody.includes('@dependabot ignore')) {
+              command = 'ignore';
+            }
+            
+            if (!command) {
+              console.log('未识别的命令，跳过处理');
+              return;
+            }
+            
+            console.log(`执行命令: ${command}`);
+            
+            // 执行相应操作
+            switch (command) {
+              case 'rebase':
+                // 重新基于最新代码
+                try {
+                  await github.rest.pulls.updateBranch({
+                    owner: prOwner,
+                    repo: prRepo,
+                    pull_number: prNumber
+                  });
+                  
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: '✅ 正在重新基于最新代码...'
+                  });
+                } catch (error) {
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: `❌ 重新基于最新代码失败: ${error.message}`
+                  });
+                }
+                break;
+                
+              case 'recreate':
+                // 重新创建 PR（关闭当前 PR 并创建新的）
+                try {
+                  await github.rest.pulls.update({
+                    owner: prOwner,
+                    repo: prRepo,
+                    pull_number: prNumber,
+                    state: 'closed'
+                  });
+                  
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: '✅ PR 已关闭。请等待 Dependabot 重新创建新的 PR。'
+                  });
+                } catch (error) {
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: `❌ 关闭 PR 失败: ${error.message}`
+                  });
+                }
+                break;
+                
+              case 'merge':
+                // 合并 PR（需要检查合并策略）
+                try {
+                  // 检查 PR 是否可合并
+                  if (pr.mergeable === false) {
+                    await github.rest.issues.createComment({
+                      owner: prOwner,
+                      repo: prRepo,
+                      issue_number: prNumber,
+                      body: '⚠️ PR 当前无法合并，可能存在冲突。请先解决冲突后再试。'
+                    });
+                    return;
+                  }
+                  
+                  // 尝试合并（使用 squash merge）
+                  await github.rest.pulls.merge({
+                    owner: prOwner,
+                    repo: prRepo,
+                    pull_number: prNumber,
+                    merge_method: 'squash',
+                    commit_title: pr.title,
+                    commit_message: `Merge PR #${prNumber}: ${pr.title}`
+                  });
+                  
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: '✅ PR 已成功合并！'
+                  });
+                } catch (error) {
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: `❌ 合并 PR 失败: ${error.message}`
+                  });
+                }
+                break;
+                
+              case 'close':
+                // 关闭 PR
+                try {
+                  await github.rest.pulls.update({
+                    owner: prOwner,
+                    repo: prRepo,
+                    pull_number: prNumber,
+                    state: 'closed'
+                  });
+                  
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: '✅ PR 已关闭。'
+                  });
+                } catch (error) {
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: `❌ 关闭 PR 失败: ${error.message}`
+                  });
+                }
+                break;
+                
+              case 'ignore':
+                // 忽略依赖更新（添加标签或评论）
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    labels: ['dependabot-ignore']
+                  });
+                  
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: '✅ 已标记为忽略此依赖的更新。PR 将被关闭。'
+                  });
+                  
+                  // 关闭 PR
+                  await github.rest.pulls.update({
+                    owner: prOwner,
+                    repo: prRepo,
+                    pull_number: prNumber,
+                    state: 'closed'
+                  });
+                } catch (error) {
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: `❌ 忽略依赖更新失败: ${error.message}`
+                  });
+                }
+                break;
+            }
+

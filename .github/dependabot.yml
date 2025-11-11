@@ -4,17 +4,65 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+    # 限制同时打开的 PR 数量
+    open-pull-requests-limit: 5
     allow:
       - dependency-type: "direct"
     # 提交消息格式
     commit-message:
       prefix: "fix"
       include: "scope"
+    # 分组配置：将相关依赖分组，一起更新到一个 PR
+    # 这样可以避免为每个依赖创建单独的 PR
+    groups:
+      # Spring Boot 相关依赖分组（所有 Spring 相关依赖一起更新）
+      spring-boot-dependencies:
+        patterns:
+          - "org.springframework.boot:*"
+          - "org.springframework:*"
+        update-types:
+          - "minor"
+          - "patch"
+      # 测试相关依赖分组
+      test-dependencies:
+        patterns:
+          - "org.junit.jupiter:*"
+          - "org.mockito:*"
+          - "org.assertj:*"
+        update-types:
+          - "minor"
+          - "patch"
+      # 工具类依赖分组（如 Lombok、Jackson、Apache Commons 等）
+      utility-dependencies:
+        patterns:
+          - "org.projectlombok:*"
+          - "com.fasterxml.jackson.core:*"
+          - "com.fasterxml.jackson.databind:*"
+          - "org.apache.commons:*"
+        update-types:
+          - "minor"
+          - "patch"
+      # 其他所有依赖分组（匹配所有未被上述组匹配的依赖）
+      # 注意：这个组会匹配所有其他依赖，将它们一起更新到一个 PR
+      all-other-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
     # 启用安全更新（Dependabot 会自动创建 PR 修复安全漏洞）
-    # 注意：需要在仓库设置中启用 Dependabot security updates
+    # 注意：安全更新不受 groups 限制，每个安全漏洞会单独创建 PR
+    # 需要在仓库设置中启用 Dependabot security updates
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    # GitHub Actions 也可以分组
+    groups:
+      github-actions-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

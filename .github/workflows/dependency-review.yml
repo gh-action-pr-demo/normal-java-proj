@@ -36,17 +36,97 @@ jobs:
             try {
               console.log('检测到漏洞，开始生成报告...');
               console.log(`Head SHA: ${context.payload.pull_request.head.sha}`);
+              console.log(`Base SHA: ${context.payload.pull_request.base.sha}`);
               console.log(`Run ID: ${context.runId}`);
+              
+              // 使用 Dependency Graph API 获取漏洞详情
+              let vulnerabilities = [];
+              try {
+                const { data: diff } = await github.rest.dependencyGraph.diffRange({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
+                });
+                
+                if (diff.vulnerabilities && diff.vulnerabilities.length > 0) {
+                  vulnerabilities = diff.vulnerabilities;
+                  console.log(`从 diffRange 获取到 ${vulnerabilities.length} 个漏洞`);
+                }
+              } catch (apiError) {
+                console.log('Dependency Graph API 调用失败:', apiError.message);
+                // 继续执行，即使无法获取详细漏洞信息
+              }
               
               // 构建 Actions summary 页面链接
               const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
               
-              // 创建评论内容，包含指向 Actions summary 的链接（在新标签页打开）
-              let commentBody = `## Dependency Review\n\n`;
+              // 创建评论内容
+              let commentBody = `## 🔒 Dependency Review\n\n`;
               commentBody += `⚠️ **检测到安全漏洞**\n\n`;
               commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
-              commentBody += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">查看完整的依赖安全检查报告（包含修复版本建议）</a>\n\n`;
-              commentBody += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。你可以在报告页面查看每个漏洞建议升级到的版本。\n\n`;
+              
+              // 如果有详细的漏洞信息，显示版本升级建议
+              if (vulnerabilities.length > 0) {
+                commentBody += `### 📋 漏洞详情及修复建议\n\n`;
+                
+                // 按包分组
+                const vulnByPackage = {};
+                vulnerabilities.forEach(vuln => {
+                  const pkgName = vuln.package?.name || 'unknown';
+                  const pkgVersion = vuln.package?.version || 'unknown';
+                  const pkgKey = `${pkgName}@${pkgVersion}`;
+                  
+                  if (!vulnByPackage[pkgKey]) {
+                    vulnByPackage[pkgKey] = {
+                      name: pkgName,
+                      version: pkgVersion,
+                      ecosystem: vuln.package?.ecosystem || 'maven',
+                      vulnerabilities: []
+                    };
+                  }
+                  
+                  vulnByPackage[pkgKey].vulnerabilities.push({
+                    severity: vuln.severity || 'unknown',
+                    ghsa_id: vuln.advisory?.ghsa_id,
+                    cve_id: vuln.advisory?.cve_id,
+                    summary: vuln.advisory?.summary,
+                    patched_version: vuln.first_patched_version?.identifier || vuln.first_patched_version
+                  });
+                });
+                
+                // 生成漏洞列表，显示当前版本和目标版本
+                Object.values(vulnByPackage).forEach((pkg, index) => {
+                  const patchedVersions = [...new Set(pkg.vulnerabilities.map(v => v.patched_version).filter(Boolean))];
+                  const targetVersion = patchedVersions.length > 0 ? patchedVersions[0] : '待确定';
+                  
+                  commentBody += `${index + 1}. **${pkg.name}**\n`;
+                  commentBody += `   - 📦 **当前版本**: \`${pkg.version}\`\n`;
+                  commentBody += `   - ✅ **建议升级至**: \`${targetVersion}\`\n`;
+                  
+                  pkg.vulnerabilities.forEach((vuln, vulnIndex) => {
+                    const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
+                    commentBody += `   - ${severityEmoji} **${vuln.severity || 'unknown'}** severity`;
+                    if (vuln.ghsa_id || vuln.cve_id) {
+                      commentBody += ` (${vuln.ghsa_id || vuln.cve_id})`;
+                    }
+                    commentBody += `\n`;
+                  });
+                  commentBody += `\n`;
+                });
+              }
+              
+              commentBody += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">📊 查看完整的依赖安全检查报告</a>\n\n`;
+              
+              // 添加 @dependabot 命令说明
+              commentBody += `### 🤖 可用命令\n\n`;
+              commentBody += `你可以在 PR 评论中使用以下命令：\n\n`;
+              commentBody += `- \`@dependabot rebase\` - 重新基于最新代码\n`;
+              commentBody += `- \`@dependabot recreate\` - 重新创建此 PR\n`;
+              commentBody += `- \`@dependabot merge\` - 合并此 PR\n`;
+              commentBody += `- \`@dependabot close\` - 关闭此 PR\n`;
+              commentBody += `- \`@dependabot ignore this dependency\` - 忽略此依赖的更新\n\n`;
+              
+              commentBody += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。\n\n`;
               commentBody += `---\n`;
               commentBody += `*此评论由 GitHub Actions 自动生成*\n`;
 
@@ -80,11 +160,11 @@ jobs:
               const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
               
               // 即使出错，也创建一个包含 summary 链接的评论（在新标签页打开）
-              let errorComment = `## Dependency Review\n\n⚠️ **检测到安全漏洞**\n\n`;
+              let errorComment = `## 🔒 Dependency Review\n\n⚠️ **检测到安全漏洞**\n\n`;
               errorComment += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
-              errorComment += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">查看完整的依赖安全检查报告（包含修复版本建议）</a>\n\n`;
-              errorComment += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。你可以在报告页面查看每个漏洞建议升级到的版本。\n\n`;
+              errorComment += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">📊 查看完整的依赖安全检查报告（包含修复版本建议）</a>\n\n`;
               errorComment += `**注意**: 生成评论时遇到错误: \`${error.message}\`\n\n`;
+              errorComment += `**提示**: 请查看 Actions summary 页面获取详细的漏洞信息和修复版本建议。\n\n`;
               errorComment += `---\n`;
               errorComment += `*此评论由 GitHub Actions 自动生成*\n`;
               

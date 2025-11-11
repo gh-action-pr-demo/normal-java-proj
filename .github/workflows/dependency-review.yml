@@ -6,12 +6,13 @@ on:
     branches:
       - main
   issues:
-    types: [labeled]
+    types: [labeled, unlabeled]
 
 permissions:
   contents: read
   pull-requests: write
   security-events: write
+  checks: write
 
 jobs:
   dependency-review:
@@ -24,9 +25,13 @@ jobs:
           script: |
             let prNumber;
             if (context.eventName === 'issues') {
-              // 从 issues.labeled 事件获取 PR 号
-              // 只在添加 dependency-check-ignore 标签时触发
+              // 从 issues.labeled/unlabeled 事件获取 PR 号
+              // 只在添加或移除 dependency-check-ignore 标签时触发
               const labelName = context.payload.label.name;
+              const action = context.payload.action; // 'labeled' 或 'unlabeled'
+              
+              console.log(`检测到标签事件: ${action}, 标签名称: ${labelName}`);
+              
               if (labelName !== 'dependency-check-ignore') {
                 console.log(`标签 ${labelName} 不是 dependency-check-ignore，跳过`);
                 core.setOutput('is_pr', 'false');
@@ -41,7 +46,11 @@ jobs:
                 return;
               }
               
-              console.log(`检测到 dependency-check-ignore 标签，触发依赖检查`);
+              if (action === 'labeled') {
+                console.log(`检测到添加 dependency-check-ignore 标签，触发依赖检查`);
+              } else if (action === 'unlabeled') {
+                console.log(`检测到移除 dependency-check-ignore 标签，触发依赖检查`);
+              }
             } else {
               // 从 pull_request 事件获取 PR 号
               prNumber = context.payload.pull_request.number;
@@ -49,7 +58,7 @@ jobs:
             
             core.setOutput('pr_number', prNumber.toString());
             core.setOutput('is_pr', 'true');
-            console.log(`PR Number: ${prNumber}`);
+            console.log(`PR Number: ${prNumber}, Event: ${context.eventName}`);
 
       - name: Checkout repository
         if: steps.get-pr-number.outputs.is_pr == 'true'
@@ -82,11 +91,65 @@ jobs:
               console.log('依赖检查已被忽略，跳过检查');
             }
 
-      - name: Skip if ignored
+      - name: Skip if ignored and post comment
         if: steps.check-ignored.outputs.ignored == 'true'
-        run: |
-          echo "依赖检查已被忽略，跳过执行"
-          exit 0
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = '${{ steps.get-pr-number.outputs.pr_number }}';
+            
+            // 获取 PR 详情
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt(prNumber)
+            });
+            
+            const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            
+            // 创建评论说明是因为标签跳过检查
+            let skipComment = `## 🔒 Dependency Review\n\n`;
+            skipComment += `⏭️ **依赖检查已跳过**\n\n`;
+            skipComment += `**原因**: PR 已添加 \`dependency-check-ignore\` 标签\n\n`;
+            skipComment += `**Commit**: \`${pr.head.sha.substring(0, 7)}\`\n\n`;
+            skipComment += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">📊 查看 Actions 运行详情</a>\n\n`;
+            skipComment += `**提示**: 如需重新启用检查，请移除 \`dependency-check-ignore\` 标签。\n\n`;
+            skipComment += `---\n`;
+            skipComment += `*此评论由 GitHub Actions 自动生成*\n`;
+            
+            try {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: parseInt(prNumber),
+                body: skipComment
+              });
+              console.log('已创建"跳过检查"的评论');
+            } catch (error) {
+              console.error('创建评论失败:', error);
+            }
+            
+            // 创建一个成功的 check run 来覆盖之前的失败状态
+            try {
+              await github.rest.checks.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'Dependency Review',
+                head_sha: pr.head.sha,
+                status: 'completed',
+                conclusion: 'success',
+                output: {
+                  title: '依赖检查已跳过',
+                  summary: '此 PR 已添加 `dependency-check-ignore` 标签，依赖检查已跳过。'
+                }
+              });
+              console.log('已创建成功的 check run');
+            } catch (checkError) {
+              console.error('创建 check run 失败:', checkError);
+            }
+            
+            // 退出成功
+            process.exit(0);
 
       - name: Get PR details for dependency review
         id: get-pr-details

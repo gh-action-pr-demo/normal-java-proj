@@ -45,23 +45,12 @@ jobs:
               // 我们只需要在 PR 评论中添加指向 summary 的链接
               
               // 创建评论内容，包含指向 Actions summary 的链接
-              let commentBody = `## 🔍 Dependency Review\n\n`;
+              let commentBody = `## Dependency Review\n\n`;
               commentBody += `⚠️ **检测到安全漏洞**\n\n`;
-              commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n`;
-              commentBody += `**检查时间**: ${new Date().toISOString()}\n\n`;
-              
-              commentBody += `### 📋 详细检查报告\n\n`;
-              commentBody += `\`dependency-review-action\` 已经在 GitHub Actions 的 summary 页面生成了详细的检查报告。\n\n`;
-              commentBody += `👉 **[查看完整的依赖安全检查报告](${summaryUrl})**\n\n`;
-              
-              commentBody += `报告包含以下信息：\n`;
-              commentBody += `- ❌ 漏洞包统计\n`;
-              commentBody += `- ✅ 许可证兼容性检查\n`;
-              commentBody += `- 📦 依赖变更详情\n`;
-              commentBody += `- 🔍 每个漏洞的详细信息（CVE、严重程度、修复版本等）\n\n`;
-              
+              commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
+              commentBody += `**[查看完整的依赖安全检查报告](${summaryUrl})**\n\n`;
               commentBody += `---\n`;
-              commentBody += `*此评论由 GitHub Actions 自动生成，每次检测到漏洞时都会更新*\n`;
+              commentBody += `*此评论由 GitHub Actions 自动生成*\n`;
 
               console.log('准备创建新评论...');
               console.log(`评论内容长度: ${commentBody.length} 字符`);
@@ -93,10 +82,9 @@ jobs:
               const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
               
               // 即使出错，也创建一个包含 summary 链接的评论
-              let errorComment = `## 🔍 Dependency Review\n\n⚠️ **检测到安全漏洞**\n\n**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
-              errorComment += `### 📋 详细检查报告\n\n`;
-              errorComment += `\`dependency-review-action\` 已经在 GitHub Actions 的 summary 页面生成了详细的检查报告。\n\n`;
-              errorComment += `👉 **[查看完整的依赖安全检查报告](${summaryUrl})**\n\n`;
+              let errorComment = `## Dependency Review\n\n⚠️ **检测到安全漏洞**\n\n`;
+              errorComment += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
+              errorComment += `**[查看完整的依赖安全检查报告](${summaryUrl})**\n\n`;
               errorComment += `**注意**: 生成评论时遇到错误: \`${error.message}\`\n\n`;
               errorComment += `---\n`;
               errorComment += `*此评论由 GitHub Actions 自动生成*\n`;

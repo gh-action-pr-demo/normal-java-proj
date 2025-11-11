@@ -1,0 +1,113 @@
+name: Dependency Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Dependency Review
+        id: dep-review
+        continue-on-error: true
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+      - name: Get dependency review results and post comment
+        id: get-results
+        if: steps.dep-review.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              console.log('检测到漏洞，开始生成报告...');
+              console.log(`Head SHA: ${context.payload.pull_request.head.sha}`);
+              console.log(`Run ID: ${context.runId}`);
+              
+              // 构建 Actions summary 页面链接
+              const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+              
+              // 创建评论内容，包含指向 Actions summary 的链接（在新标签页打开）
+              let commentBody = `## Dependency Review\n\n`;
+              commentBody += `⚠️ **检测到安全漏洞**\n\n`;
+              commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
+              commentBody += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">查看完整的依赖安全检查报告（包含修复版本建议）</a>\n\n`;
+              commentBody += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。你可以在报告页面查看每个漏洞建议升级到的版本。\n\n`;
+              commentBody += `---\n`;
+              commentBody += `*此评论由 GitHub Actions 自动生成*\n`;
+
+              console.log('准备创建新评论...');
+              console.log(`评论内容长度: ${commentBody.length} 字符`);
+              console.log(`Summary URL: ${summaryUrl}`);
+              console.log(`评论内容预览: ${commentBody.substring(0, 200)}...`);
+
+              // 每次都创建新评论，不更新现有评论
+              try {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: commentBody
+                });
+                console.log('新评论创建成功');
+              } catch (createError) {
+                console.error('创建评论失败:', createError);
+                throw createError;
+              }
+
+              // 由于检测到漏洞，设置输出
+              core.setOutput('has-vulnerabilities', 'true');
+              console.log('脚本执行完成');
+            } catch (error) {
+              console.error('生成报告时出错:', error);
+              console.error('错误堆栈:', error.stack);
+              
+              // 构建 Actions summary 页面链接
+              const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+              
+              // 即使出错，也创建一个包含 summary 链接的评论（在新标签页打开）
+              let errorComment = `## Dependency Review\n\n⚠️ **检测到安全漏洞**\n\n`;
+              errorComment += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
+              errorComment += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">查看完整的依赖安全检查报告（包含修复版本建议）</a>\n\n`;
+              errorComment += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。你可以在报告页面查看每个漏洞建议升级到的版本。\n\n`;
+              errorComment += `**注意**: 生成评论时遇到错误: \`${error.message}\`\n\n`;
+              errorComment += `---\n`;
+              errorComment += `*此评论由 GitHub Actions 自动生成*\n`;
+              
+              try {
+                // 创建新评论（不更新现有评论）
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: errorComment
+                });
+                console.log('错误评论创建成功');
+              } catch (commentError) {
+                console.error('创建错误评论时也失败了:', commentError);
+                // 如果连评论都创建不了，至少输出到日志
+                core.setFailed(`无法创建评论: ${commentError.message}`);
+              }
+              
+              core.setOutput('has-vulnerabilities', 'true');
+            }
+
+      - name: Fail if vulnerabilities found
+        if: steps.dep-review.outcome == 'failure'
+        run: |
+          echo "发现安全漏洞，请查看 PR 评论中的详细报告"
+          exit 1

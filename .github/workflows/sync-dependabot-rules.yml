@@ -1,0 +1,171 @@
+name: Sync Dependabot Rules
+
+on:
+  push:
+    paths:
+      - '.github/dependabot-rules.yml'
+      - '.github/allow-deps.txt'
+      - '.github/ignore-deps.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install deps
+        run: pip install pyyaml
+
+      - name: Merge rules into dependabot.yml
+        id: merge
+        run: |
+          python - << 'PY'
+          import os, sys
+          import yaml
+          from yaml.loader import SafeLoader
+          from typing import List, Tuple
+
+          dep_file = '.github/dependabot.yml'
+          rules_file = '.github/dependabot-rules.yml'
+          allow_txt = '.github/allow-deps.txt'
+          ignore_txt = '.github/ignore-deps.txt'
+          if not os.path.exists(dep_file) or not os.path.exists(rules_file):
+              print('Files not found, skip.')
+              sys.exit(0)
+
+          with open(dep_file, 'r', encoding='utf-8') as f:
+              dep = yaml.load(f, Loader=SafeLoader)
+          with open(rules_file, 'r', encoding='utf-8') as f:
+              rules = yaml.load(f, Loader=SafeLoader) or {}
+
+          updates = dep.get('updates', [])
+          allow = rules.get('allow') or {}
+          ignore = rules.get('ignore') or {}
+
+          def read_txt(path: str) -> List[Tuple[str, str]]:
+              if not os.path.exists(path):
+                  return []
+              pairs = []
+              with open(path, 'r', encoding='utf-8') as f:
+                  for line in f:
+                      line = line.strip()
+                      if not line or line.startswith('#'):
+                          continue
+                      # 格式支持：
+                      # - maven:groupId:artifactId
+                      # - gradle:group:artifact
+                      # - github-actions:owner/action
+                      # - 无前缀则默认 maven
+                      eco = None
+                      name = line
+                      if ':' in line:
+                          prefix = line.split(':', 1)[0]
+                          if prefix in ('maven', 'gradle', 'github-actions'):
+                              eco = prefix
+                              name = line[len(prefix) + 1:]
+                      if eco is None:
+                          eco = 'maven'
+                      pairs.append((eco, name))
+              return pairs
+
+          allow_pairs = read_txt(allow_txt)
+          ignore_pairs = read_txt(ignore_txt)
+
+          # 将纯文本规则合并到 allow/ignore 结构中（按 ecosystem 聚合）
+          def merge_pairs_to_section(section, pairs, is_ignore: bool):
+              mapping = { 'maven': [], 'gradle': [], 'github-actions': [] }
+              for eco, name in pairs:
+                  if is_ignore:
+                      # ignore 支持 update-types；纯文本场景用户不关心版本类型，留空表示忽略全部更新类型
+                      mapping[eco].append({ 'dependency-name': name })
+                  else:
+                      mapping[eco].append({ 'dependency-name': name })
+              # 将 mapping 覆盖到 section（若某 ecosytem 有值则替换；无值不动）
+              for eco, items in mapping.items():
+                  if items:
+                      if isinstance(section, dict):
+                          exist = section.get(eco)
+                          section[eco] = items if items else exist
+              return section
+
+          allow = merge_pairs_to_section(allow, allow_pairs, is_ignore=False)
+          ignore = merge_pairs_to_section(ignore, ignore_pairs, is_ignore=True)
+
+          def rules_for(ecosystem, section):
+              if isinstance(section, dict):
+                  return section.get(ecosystem)
+              elif isinstance(section, list):
+                  # 支持列表形式，且允许指定 package-ecosystem
+                  lst = []
+                  for r in section:
+                      eco = r.get('package-ecosystem')
+                      if eco is None or eco == ecosystem:
+                          r = dict(r)
+                          r.pop('package-ecosystem', None)
+                          lst.append(r)
+                  return lst
+              return None
+
+          changed = False
+          for u in updates:
+              eco = u.get('package-ecosystem')
+              if not eco:
+                  continue
+
+              new_allow = rules_for(eco, allow)
+              new_ignore = rules_for(eco, ignore)
+
+              # 若 rules 文件中为该 ecosystem 提供了条目，则以 rules 为准进行替换；
+              # 若提供空列表，则表示清空该项；若未提供则保持不变
+              if new_allow is not None:
+                  if new_allow:
+                      if u.get('allow') != new_allow:
+                          u['allow'] = new_allow
+                          changed = True
+                  else:
+                      if 'allow' in u:
+                          del u['allow']
+                          changed = True
+
+              if new_ignore is not None:
+                  if new_ignore:
+                      if u.get('ignore') != new_ignore:
+                          u['ignore'] = new_ignore
+                          changed = True
+                  else:
+                      if 'ignore' in u:
+                          del u['ignore']
+                          changed = True
+
+          if changed:
+              with open(dep_file, 'w', encoding='utf-8') as f:
+                  yaml.dump(dep, f, sort_keys=False, allow_unicode=True)
+              print('changed=true')
+          else:
+              print('changed=false')
+          PY
+
+      - name: Commit changes
+        run: |
+          if git diff --quiet -- .github/dependabot.yml; then
+            echo "No changes to commit."
+          else:
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/dependabot.yml
+            git commit -m "chore: sync dependabot allow/ignore rules"
+            git push
+
+

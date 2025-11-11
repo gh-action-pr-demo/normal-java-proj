@@ -167,5 +167,6 @@ jobs:
             git add .github/dependabot.yml
             git commit -m "chore: sync dependabot allow/ignore rules"
             git push
+          fi
 
 

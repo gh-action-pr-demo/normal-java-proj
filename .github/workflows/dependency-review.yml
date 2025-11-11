@@ -10,6 +10,7 @@ permissions:
   contents: read
   pull-requests: write
   security-events: read
+  vulnerabilities: read
 
 jobs:
   dependency-review:
@@ -33,88 +34,115 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            const fs = require('fs');
+            const path = require('path');
+            
             let commentBody = '';
             let hasVulns = false;
             
             try {
               console.log('开始获取依赖审查信息...');
-              console.log(`Base SHA: ${context.payload.pull_request.base.sha}`);
               console.log(`Head SHA: ${context.payload.pull_request.head.sha}`);
               
-              // 获取 PR 的依赖变更和新增漏洞
-              const { data: diffRange } = await github.rest.dependencyGraph.diffRange({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
-              });
+              // 方法1: 尝试读取 dependency-review-action 的输出文件
+              // dependency-review-action 可能会生成报告文件
+              let allVulnerabilities = [];
+              let dependencyChanges = [];
               
-              console.log('成功获取 diffRange 数据');
-              console.log(`Change type: ${diffRange.change_type || 'undefined'}`);
-              console.log(`Vulnerabilities count: ${(diffRange.vulnerabilities || []).length}`);
-              console.log(`Changes count: ${(diffRange.changes || []).length}`);
-
-              // 获取新增的漏洞（PR 引入的）
-              const newVulnerabilities = diffRange.vulnerabilities || [];
+              // 尝试从多个可能的位置读取报告
+              const possibleReportPaths = [
+                'dependency-review-results.sarif',
+                'dependency-review-summary.md',
+                '.github/dependency-review-results.json'
+              ];
               
-              // 获取 head 分支的所有漏洞（包括新增和已存在的）
-              // 通过比较 head 和 head 的父 commit 来获取 head 的所有漏洞
-              let allHeadVulnerabilities = [];
-              try {
-                const { data: headCommit } = await github.rest.repos.getCommit({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  ref: context.payload.pull_request.head.sha
-                });
-                
-                if (headCommit.parents && headCommit.parents.length > 0) {
-                  const parentSha = headCommit.parents[0].sha;
-                  const { data: headDiff } = await github.rest.dependencyGraph.diffRange({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    basehead: `${parentSha}...${context.payload.pull_request.head.sha}`
-                  });
-                  allHeadVulnerabilities = headDiff.vulnerabilities || [];
-                  console.log(`Head 分支所有漏洞数量: ${allHeadVulnerabilities.length}`);
-                }
-              } catch (e) {
-                console.log('无法获取 head 分支完整漏洞信息:', e.message);
-                // 如果无法获取，尝试使用 base 分支的漏洞作为参考
+              let reportFound = false;
+              for (const reportPath of possibleReportPaths) {
                 try {
-                  const { data: baseCommit } = await github.rest.repos.getCommit({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    ref: context.payload.pull_request.base.sha
-                  });
-                  
-                  if (baseCommit.parents && baseCommit.parents.length > 0) {
-                    const parentSha = baseCommit.parents[0].sha;
-                    const { data: baseDiff } = await github.rest.dependencyGraph.diffRange({
-                      owner: context.repo.owner,
-                      repo: context.repo.repo,
-                      basehead: `${parentSha}...${context.payload.pull_request.base.sha}`
-                    });
-                    allHeadVulnerabilities = baseDiff.vulnerabilities || [];
-                    console.log(`Base 分支漏洞数量: ${allHeadVulnerabilities.length}`);
+                  if (fs.existsSync(reportPath)) {
+                    console.log(`找到报告文件: ${reportPath}`);
+                    const reportContent = fs.readFileSync(reportPath, 'utf8');
+                    console.log(`报告文件内容长度: ${reportContent.length}`);
+                    // 这里可以根据实际文件格式解析
+                    reportFound = true;
+                    break;
                   }
-                } catch (e2) {
-                  console.log('无法获取 base 分支漏洞信息:', e2.message);
+                } catch (e) {
+                  console.log(`无法读取 ${reportPath}: ${e.message}`);
                 }
               }
-
-              // 计算已存在的漏洞 = head 的所有漏洞 - 新增的漏洞
-              const newVulnKeys = new Set(
-                newVulnerabilities.map(v => `${v.package.name}@${v.package.version}:${v.advisory?.ghsa_id || v.advisory?.cve_id || ''}`)
-              );
-              const existingVulnerabilities = allHeadVulnerabilities.filter(v => {
-                const key = `${v.package.name}@${v.package.version}:${v.advisory?.ghsa_id || v.advisory?.cve_id || ''}`;
-                return !newVulnKeys.has(key);
-              });
-
-              console.log(`新增漏洞数量: ${newVulnerabilities.length}`);
-              console.log(`已存在漏洞数量: ${existingVulnerabilities.length}`);
-
-              // 合并所有漏洞（新增 + 已存在）
-              const allVulnerabilities = [...newVulnerabilities, ...existingVulnerabilities];
+              
+              // 方法2: 使用 GitHub Security API 获取当前仓库的所有漏洞警报
+              if (!reportFound) {
+                console.log('未找到报告文件，使用 Security API 获取漏洞信息...');
+                
+                try {
+                  // 获取当前仓库的所有 Dependabot alerts
+                  const { data: alerts } = await github.rest.dependabot.listAlertsForRepo({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    state: 'open' // 只获取开放状态的警报
+                  });
+                  
+                  console.log(`获取到 ${alerts.length} 个 Dependabot alerts`);
+                  
+                  // 将 alerts 转换为漏洞格式
+                  allVulnerabilities = alerts.map(alert => ({
+                    package: {
+                      name: alert.dependency?.package?.name || 'unknown',
+                      version: alert.dependency?.version || 'unknown',
+                      ecosystem: alert.dependency?.package?.ecosystem || 'maven'
+                    },
+                    severity: alert.security_vulnerability?.severity || 'unknown',
+                    advisory: {
+                      ghsa_id: alert.security_advisory?.ghsa_id || alert.security_advisory?.cve_id,
+                      cve_id: alert.security_advisory?.cve_id,
+                      summary: alert.security_advisory?.summary,
+                      cvss: {
+                        score: alert.security_vulnerability?.cvss?.score
+                      }
+                    },
+                    first_patched_version: alert.security_vulnerability?.first_patched_version ? {
+                      identifier: alert.security_vulnerability.first_patched_version.identifier
+                    } : null
+                  }));
+                  
+                  console.log(`转换后的漏洞数量: ${allVulnerabilities.length}`);
+                  
+                  // 获取依赖变更信息
+                  const { data: prDiff } = await github.rest.dependencyGraph.diffRange({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
+                  });
+                  
+                  dependencyChanges = prDiff.changes || [];
+                  console.log(`依赖变更数量: ${dependencyChanges.length}`);
+                  
+                } catch (apiError) {
+                  console.error('Security API 调用失败:', apiError);
+                  console.log('尝试使用 diffRange API 作为备选方案...');
+                  
+                  // 备选方案：使用 diffRange API
+                  try {
+                    const { data: prDiff } = await github.rest.dependencyGraph.diffRange({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
+                    });
+                    
+                    allVulnerabilities = prDiff.vulnerabilities || [];
+                    dependencyChanges = prDiff.changes || [];
+                    console.log(`diffRange 返回的漏洞数量: ${allVulnerabilities.length}`);
+                  } catch (diffError) {
+                    console.error('diffRange API 也失败:', diffError);
+                    throw diffError;
+                  }
+                }
+              }
+              
+              console.log(`最终获取到的漏洞数量: ${allVulnerabilities.length}`);
+              console.log(`依赖变更数量: ${dependencyChanges.length}`);
               
               // 统计漏洞包（去重）
               const vulnerablePackages = new Set();
@@ -122,12 +150,10 @@ jobs:
                 vulnerablePackages.add(`${vuln.package.name}@${vuln.package.version}`);
               });
 
-              const hasNewVulns = newVulnerabilities.length > 0;
-              const hasExistingVulns = existingVulnerabilities.length > 0;
               const hasVulns = allVulnerabilities.length > 0;
               
               // 获取依赖变更和许可证信息
-              const changes = diffRange.changes || [];
+              const changes = dependencyChanges || [];
               
               // 统计许可证问题
               let incompatibleLicenses = 0;

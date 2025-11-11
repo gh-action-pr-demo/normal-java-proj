@@ -17,7 +17,8 @@ jobs:
       - name: Dependency Review (summary to PR)
         uses: actions/dependency-review-action@v4
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 使用具备写权限的 PAT，绕过只读的默认 GITHUB_TOKEN
+          GITHUB_TOKEN: ${{ secrets.PR_COMMENT_TOKEN }}
         with:
           fail-on-severity: high
           comment-summary-in-pr: true

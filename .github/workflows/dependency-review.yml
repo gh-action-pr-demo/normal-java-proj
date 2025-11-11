@@ -2,113 +2,56 @@ name: Dependency Review
 
 on:
   pull_request:
-    # 监听所有 PR 事件，确保在非默认分支也能触发
-    types: [opened, synchronize, reopened, edited, ready_for_review, labeled, unlabeled]
-  issue_comment:
-    types: [created, edited]
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
   contents: read
   pull-requests: write
-  issues: write
 
 jobs:
   dependency-review:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - name: Detect event and parse context
-        id: ctx
+      - name: Check skip keywords in PR comments
+        id: skipchk
         uses: actions/github-script@v7
         with:
           script: |
-            const eventName = context.eventName;
-            const result = {
-              event: eventName,
-              isPR: false,
-              prNumber: '',
-              headRef: '',
-              baseRef: '',
-              headSha: '',
-              baseSha: '',
-              commentBody: ''
-            };
-            if (eventName === 'pull_request' || eventName === 'pull_request_target') {
-              result.isPR = true;
-              result.prNumber = context.payload.pull_request.number;
-              result.headRef = context.payload.pull_request.head.ref;
-              result.baseRef = context.payload.pull_request.base.ref;
-              result.headSha = context.payload.pull_request.head.sha;
-              result.baseSha = context.payload.pull_request.base.sha;
-            } else if (eventName === 'issue_comment') {
-              const isPR = !!context.payload.issue.pull_request;
-              result.isPR = isPR;
-              result.prNumber = context.payload.issue.number;
-              result.commentBody = context.payload.comment.body || '';
-              if (isPR) {
-                const pr = await github.rest.pulls.get({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  pull_number: result.prNumber
-                });
-                result.headRef = pr.data.head.ref;
-                result.baseRef = pr.data.base.ref;
-                result.headSha = pr.data.head.sha;
-                result.baseSha = pr.data.base.sha;
-              }
-            }
-            core.setOutput('event', result.event);
-            core.setOutput('isPR', String(result.isPR));
-            core.setOutput('prNumber', String(result.prNumber));
-            core.setOutput('headRef', result.headRef);
-            core.setOutput('baseRef', result.baseRef);
-            core.setOutput('headSha', result.headSha);
-            core.setOutput('baseSha', result.baseSha);
-            core.setOutput('commentBody', result.commentBody);
+            const prNumber = context.payload.pull_request.number;
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100
+            });
+            const patterns = [
+              /\[skip dependency check\]/i,
+              /\[skip-dependency-check\]/i,
+              /\[skip dependency-check\]/i,
+              /\[skip-dependency check\]/i
+            ];
+            const hasSkip = comments.some(c => patterns.some(p => p.test(c.body || '')));
+            core.setOutput('skip', String(hasSkip));
 
-      - name: No-op when issue_comment is not on a PR
-        if: github.event_name == 'issue_comment' && steps.ctx.outputs.isPR != 'true'
-        run: echo "Issue comment is not on a PR. Nothing to do." && exit 0
-
-      - name: Check comment keywords (trigger or skip)
-        id: kw
-        if: github.event_name == 'issue_comment'
-        shell: bash
-        env:
-          COMMENT_BODY: ${{ steps.ctx.outputs.commentBody }}
-        run: |
-          body_lc="$(printf "%s" "$COMMENT_BODY" | tr '[:upper:]' '[:lower:]')"
-          # 仅支持“跳过检查”的关键字（保持与之前设计一致的四种写法）
-          # [skip dependency check] | [skip-dependency-check] | [skip dependency-check] | [skip-dependency check]
-          if echo "$body_lc" | grep -qE '\[skip dependency check\]|\[skip-dependency-check\]|\[skip dependency-check\]|\[skip-dependency check\]'; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Skip by keyword (commented)
-        if: github.event_name == 'issue_comment' && steps.kw.outputs.skip == 'true'
+      - name: Skip notice
+        if: steps.skipchk.outputs.skip == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: Number("${{ steps.ctx.outputs.prNumber }}"),
+              issue_number: context.payload.pull_request.number,
               body: "✅ 已根据评论关键字跳过依赖变更审查（Dependency Review）。"
             });
-            core.notice('Skip keyword detected. Dependency review skipped.');
-          result-encoding: string
 
       - name: Early exit after skip
-        if: github.event_name == 'issue_comment' && steps.kw.outputs.skip == 'true'
+        if: steps.skipchk.outputs.skip == 'true'
         run: echo "Skipped by keyword." && exit 0
 
-      - name: No-op for non-skip comments
-        if: github.event_name == 'issue_comment' && steps.kw.outputs.skip != 'true'
-        run: echo "Comment does not contain skip keywords. Nothing to do." && exit 0
-
       - name: Dependency Review
-        if: startsWith(github.event_name, 'pull_request')
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high

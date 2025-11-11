@@ -20,6 +20,37 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check if dependency check is ignored
+        id: check-ignored
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = context.payload.pull_request.number;
+            const { data: issue } = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber
+            });
+            
+            const labels = issue.labels.map(l => l.name);
+            const isIgnored = labels.includes('dependency-check-ignored') || 
+                             labels.includes('skip-dependency-check');
+            
+            console.log(`PR 标签: ${labels.join(', ')}`);
+            console.log(`是否忽略检查: ${isIgnored}`);
+            
+            core.setOutput('ignored', isIgnored.toString());
+            
+            if (isIgnored) {
+              console.log('依赖检查已被忽略，跳过检查');
+            }
+
+      - name: Skip if ignored
+        if: steps.check-ignored.outputs.ignored == 'true'
+        run: |
+          echo "依赖检查已被忽略，跳过执行"
+          exit 0
+
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
@@ -202,11 +233,11 @@ jobs:
               // 添加 @dependabot 命令说明
               commentBody += `### 🤖 可用命令\n\n`;
               commentBody += `你可以在 PR 评论中使用以下命令：\n\n`;
+              commentBody += `- \`@dependabot ignore\` 或 \`skip dependency check\` - **忽略这次依赖检查**\n`;
               commentBody += `- \`@dependabot rebase\` - 重新基于最新代码\n`;
               commentBody += `- \`@dependabot recreate\` - 重新创建此 PR\n`;
               commentBody += `- \`@dependabot merge\` - 合并此 PR\n`;
-              commentBody += `- \`@dependabot close\` - 关闭此 PR\n`;
-              commentBody += `- \`@dependabot ignore this dependency\` - 忽略此依赖的更新\n\n`;
+              commentBody += `- \`@dependabot close\` - 关闭此 PR\n\n`;
               
               commentBody += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。\n\n`;
               commentBody += `---\n`;

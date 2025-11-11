@@ -11,10 +11,11 @@ permissions:
 
 jobs:
   handle-dependabot-commands:
-    # 只在 PR 评论中触发，且评论包含 @dependabot
+    # 只在 PR 评论中触发，且评论包含 @dependabot 或 skip dependency check
     if: |
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '@dependabot')
+      (contains(github.event.comment.body, '@dependabot') || 
+       contains(github.event.comment.body, 'skip dependency check'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -48,7 +49,9 @@ jobs:
             
             // 解析命令
             let command = null;
-            if (commentBody.includes('@dependabot rebase')) {
+            if (commentBody.includes('@dependabot ignore') || commentBody.includes('skip dependency check')) {
+              command = 'ignore-check';
+            } else if (commentBody.includes('@dependabot rebase')) {
               command = 'rebase';
             } else if (commentBody.includes('@dependabot recreate')) {
               command = 'recreate';
@@ -56,7 +59,7 @@ jobs:
               command = 'merge';
             } else if (commentBody.includes('@dependabot close')) {
               command = 'close';
-            } else if (commentBody.includes('@dependabot ignore')) {
+            } else if (commentBody.includes('@dependabot ignore this dependency')) {
               command = 'ignore';
             }
             
@@ -69,6 +72,32 @@ jobs:
             
             // 执行相应操作
             switch (command) {
+              case 'ignore-check':
+                // 忽略这次依赖检查（添加标签）
+                try {
+                  await github.rest.issues.addLabels({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    labels: ['dependency-check-ignored']
+                  });
+                  
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: '✅ 已忽略这次依赖检查。后续的 commit 将跳过依赖安全检查。\n\n如需重新启用检查，请移除 `dependency-check-ignored` 标签。'
+                  });
+                } catch (error) {
+                  await github.rest.issues.createComment({
+                    owner: prOwner,
+                    repo: prRepo,
+                    issue_number: prNumber,
+                    body: `❌ 忽略检查失败: ${error.message}`
+                  });
+                }
+                break;
+                
               case 'rebase':
                 // 重新基于最新代码
                 try {

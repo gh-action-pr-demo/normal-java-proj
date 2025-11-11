@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   dependency-review:
@@ -18,5 +19,6 @@ jobs:
         uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
+          comment-summary-in-pr: true
           # 可选配置示例：允许版本范围或预览版
           # allow-licenses: MIT,Apache-2.0

@@ -5,6 +5,8 @@ on:
     types: [opened, synchronize, reopened]
     branches:
       - main
+  issues:
+    types: [labeled]
 
 permissions:
   contents: read
@@ -15,26 +17,61 @@ jobs:
   dependency-review:
     runs-on: ubuntu-latest
     steps:
+      - name: Get PR number from context
+        id: get-pr-number
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let prNumber;
+            if (context.eventName === 'issues') {
+              // 从 issues.labeled 事件获取 PR 号
+              // 只在添加 dependency-check-ignore 标签时触发
+              const labelName = context.payload.label.name;
+              if (labelName !== 'dependency-check-ignore') {
+                console.log(`标签 ${labelName} 不是 dependency-check-ignore，跳过`);
+                core.setOutput('is_pr', 'false');
+                return;
+              }
+              
+              prNumber = context.payload.issue.number;
+              // 验证是否是 PR
+              if (!context.payload.issue.pull_request) {
+                console.log('这不是 PR，跳过');
+                core.setOutput('is_pr', 'false');
+                return;
+              }
+              
+              console.log(`检测到 dependency-check-ignore 标签，触发依赖检查`);
+            } else {
+              // 从 pull_request 事件获取 PR 号
+              prNumber = context.payload.pull_request.number;
+            }
+            
+            core.setOutput('pr_number', prNumber.toString());
+            core.setOutput('is_pr', 'true');
+            console.log(`PR Number: ${prNumber}`);
+
       - name: Checkout repository
+        if: steps.get-pr-number.outputs.is_pr == 'true'
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Check if dependency check is ignored
         id: check-ignored
+        if: steps.get-pr-number.outputs.is_pr == 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            const prNumber = context.payload.pull_request.number;
+            const prNumber = '${{ steps.get-pr-number.outputs.pr_number }}';
             const { data: issue } = await github.rest.issues.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: prNumber
+              issue_number: parseInt(prNumber)
             });
             
             const labels = issue.labels.map(l => l.name);
-            const isIgnored = labels.includes('dependency-check-ignored') || 
-                             labels.includes('skip-dependency-check');
+            const isIgnored = labels.includes('dependency-check-ignore');
             
             console.log(`PR 标签: ${labels.join(', ')}`);
             console.log(`是否忽略检查: ${isIgnored}`);
@@ -51,19 +88,40 @@ jobs:
           echo "依赖检查已被忽略，跳过执行"
           exit 0
 
+      - name: Get PR details for dependency review
+        id: get-pr-details
+        if: steps.get-pr-number.outputs.is_pr == 'true' && steps.check-ignored.outputs.ignored != 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prNumber = '${{ steps.get-pr-number.outputs.pr_number }}';
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: parseInt(prNumber)
+            });
+            
+            core.setOutput('head_sha', pr.head.sha);
+            core.setOutput('base_sha', pr.base.sha);
+            console.log(`Head SHA: ${pr.head.sha}`);
+            console.log(`Base SHA: ${pr.base.sha}`);
+
       - name: Set up JDK
+        if: steps.get-pr-number.outputs.is_pr == 'true' && steps.check-ignored.outputs.ignored != 'true'
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Build with Maven (to generate dependency graph)
+        if: steps.get-pr-number.outputs.is_pr == 'true' && steps.check-ignored.outputs.ignored != 'true'
         run: |
           mvn clean compile -DskipTests || echo "构建失败，但继续检查依赖"
           echo "Maven 构建完成，依赖图已生成"
 
       - name: Dependency Review
         id: dep-review
+        if: steps.get-pr-number.outputs.is_pr == 'true' && steps.check-ignored.outputs.ignored != 'true'
         continue-on-error: true
         uses: actions/dependency-review-action@v4
         with:
@@ -94,13 +152,22 @@ jobs:
         with:
           script: |
             try {
+              const prNumber = '${{ steps.get-pr-number.outputs.pr_number }}';
+              
+              // 获取 PR 详情以获取 SHA
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: parseInt(prNumber)
+              });
+              
               const depReviewOutcome = '${{ steps.dep-review.outcome }}';
               const hasVulnerabilities = depReviewOutcome === 'failure';
               
               console.log(`Dependency Review 结果: ${depReviewOutcome}`);
               console.log(`是否检测到漏洞: ${hasVulnerabilities}`);
-              console.log(`Head SHA: ${context.payload.pull_request.head.sha}`);
-              console.log(`Base SHA: ${context.payload.pull_request.base.sha}`);
+              console.log(`Head SHA: ${pr.head.sha}`);
+              console.log(`Base SHA: ${pr.base.sha}`);
               console.log(`Run ID: ${context.runId}`);
               
               // 如果没有检测到漏洞，也创建一个评论说明
@@ -108,7 +175,7 @@ jobs:
                 const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
                 let noVulnComment = `## 🔒 Dependency Review\n\n`;
                 noVulnComment += `✅ **未检测到高严重程度的安全漏洞**\n\n`;
-                noVulnComment += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
+                noVulnComment += `**Commit**: \`${pr.head.sha.substring(0, 7)}\`\n\n`;
                 noVulnComment += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">📊 查看完整的依赖安全检查报告</a>\n\n`;
                 noVulnComment += `**注意**: 如果预期应该检测到漏洞（如 log4j 2.13.0），请检查：\n`;
                 noVulnComment += `1. 依赖是否正确添加到 pom.xml\n`;
@@ -120,7 +187,7 @@ jobs:
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  issue_number: context.payload.pull_request.number,
+                  issue_number: parseInt(prNumber),
                   body: noVulnComment
                 });
                 console.log('已创建"未检测到漏洞"的评论');
@@ -136,7 +203,7 @@ jobs:
                 const { data: baseDiff } = await github.rest.dependencyGraph.diffRange({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  basehead: `${context.payload.pull_request.base.sha}^...${context.payload.pull_request.base.sha}`
+                  basehead: `${pr.base.sha}^...${pr.base.sha}`
                 });
                 console.log(`Base 分支漏洞数: ${baseDiff.vulnerabilities?.length || 0}`);
                 
@@ -144,7 +211,7 @@ jobs:
                 const { data: headDiff } = await github.rest.dependencyGraph.diffRange({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  basehead: `${context.payload.pull_request.head.sha}^...${context.payload.pull_request.head.sha}`
+                  basehead: `${pr.head.sha}^...${pr.head.sha}`
                 });
                 console.log(`Head 分支漏洞数: ${headDiff.vulnerabilities?.length || 0}`);
                 
@@ -152,7 +219,7 @@ jobs:
                 const { data: prDiff } = await github.rest.dependencyGraph.diffRange({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  basehead: `${context.payload.pull_request.base.sha}...${context.payload.pull_request.head.sha}`
+                  basehead: `${pr.base.sha}...${pr.head.sha}`
                 });
                 console.log(`PR diff 漏洞数: ${prDiff.vulnerabilities?.length || 0}`);
                 
@@ -176,7 +243,7 @@ jobs:
               // 创建评论内容
               let commentBody = `## 🔒 Dependency Review\n\n`;
               commentBody += `⚠️ **检测到安全漏洞**\n\n`;
-              commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
+              commentBody += `**Commit**: \`${pr.head.sha.substring(0, 7)}\`\n\n`;
               
               // 如果有详细的漏洞信息，显示版本升级建议
               if (vulnerabilities.length > 0) {
@@ -230,7 +297,7 @@ jobs:
               
               commentBody += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">📊 查看完整的依赖安全检查报告</a>\n\n`;
               
-              commentBody += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。如需忽略这次检查，请在 PR 上添加 \`dependency-check-ignored\` 标签。\n\n`;
+              commentBody += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。如需忽略这次检查，请在 PR 上添加 \`dependency-check-ignore\` 标签。\n\n`;
               commentBody += `---\n`;
               commentBody += `*此评论由 GitHub Actions 自动生成*\n`;
 
@@ -244,7 +311,7 @@ jobs:
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  issue_number: context.payload.pull_request.number,
+                  issue_number: parseInt(prNumber),
                   body: commentBody
                 });
                 console.log('新评论创建成功');
@@ -263,9 +330,16 @@ jobs:
               // 构建 Actions summary 页面链接
               const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
               
+              // 获取 PR 详情
+              const { data: pr } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: parseInt('${{ steps.get-pr-number.outputs.pr_number }}')
+              });
+              
               // 即使出错，也创建一个包含 summary 链接的评论（在新标签页打开）
               let errorComment = `## 🔒 Dependency Review\n\n⚠️ **检测到安全漏洞**\n\n`;
-              errorComment += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
+              errorComment += `**Commit**: \`${pr.head.sha.substring(0, 7)}\`\n\n`;
               errorComment += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">📊 查看完整的依赖安全检查报告（包含修复版本建议）</a>\n\n`;
               errorComment += `**注意**: 生成评论时遇到错误: \`${error.message}\`\n\n`;
               errorComment += `**提示**: 请查看 Actions summary 页面获取详细的漏洞信息和修复版本建议。\n\n`;
@@ -277,7 +351,7 @@ jobs:
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  issue_number: context.payload.pull_request.number,
+                  issue_number: parseInt('${{ steps.get-pr-number.outputs.pr_number }}'),
                   body: errorComment
                 });
                 console.log('错误评论创建成功');

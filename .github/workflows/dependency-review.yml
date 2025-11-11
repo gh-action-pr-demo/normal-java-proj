@@ -41,91 +41,12 @@ jobs:
               // 构建 Actions summary 页面链接
               const summaryUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
               
-              // 尝试获取 Dependabot alerts 以获取修复版本信息
-              let vulnerabilitiesInfo = '';
-              try {
-                console.log('尝试获取 Dependabot alerts...');
-                const { data: alerts } = await github.rest.dependabot.listAlertsForRepo({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  state: 'open'
-                });
-                
-                console.log(`获取到 ${alerts.length} 个 Dependabot alerts`);
-                
-                if (alerts.length > 0) {
-                  vulnerabilitiesInfo = `\n### 漏洞详情及修复建议\n\n`;
-                  
-                  // 按包分组
-                  const vulnByPackage = {};
-                  alerts.forEach(alert => {
-                    const pkgName = alert.dependency?.package?.name || 'unknown';
-                    const pkgVersion = alert.dependency?.version || 'unknown';
-                    const pkgKey = `${pkgName}@${pkgVersion}`;
-                    
-                    if (!vulnByPackage[pkgKey]) {
-                      vulnByPackage[pkgKey] = {
-                        name: pkgName,
-                        version: pkgVersion,
-                        ecosystem: alert.dependency?.package?.ecosystem || 'maven',
-                        vulnerabilities: []
-                      };
-                    }
-                    
-                    vulnByPackage[pkgKey].vulnerabilities.push({
-                      severity: alert.security_vulnerability?.severity || 'unknown',
-                      ghsa_id: alert.security_advisory?.ghsa_id,
-                      cve_id: alert.security_advisory?.cve_id,
-                      summary: alert.security_advisory?.summary,
-                      cvss_score: alert.security_vulnerability?.cvss?.score,
-                      patched_version: alert.security_vulnerability?.first_patched_version?.identifier
-                    });
-                  });
-                  
-                  // 生成漏洞列表
-                  Object.values(vulnByPackage).forEach((pkg, index) => {
-                    vulnerabilitiesInfo += `${index + 1}. **${pkg.name}@${pkg.version}**\n`;
-                    
-                    pkg.vulnerabilities.forEach((vuln, vulnIndex) => {
-                      const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
-                      vulnerabilitiesInfo += `   ${vulnIndex + 1}. ${severityEmoji} **${vuln.severity || 'unknown'}** severity\n`;
-                      
-                      if (vuln.ghsa_id || vuln.cve_id) {
-                        vulnerabilitiesInfo += `      - **Advisory**: ${vuln.ghsa_id || vuln.cve_id}\n`;
-                      }
-                      
-                      if (vuln.patched_version) {
-                        vulnerabilitiesInfo += `      - **建议升级至**: \`${vuln.patched_version}\`\n`;
-                      } else {
-                        vulnerabilitiesInfo += `      - **修复版本**: 暂无可用修复版本\n`;
-                      }
-                      
-                      vulnerabilitiesInfo += `\n`;
-                    });
-                  });
-                }
-              } catch (alertsError) {
-                console.log('无法获取 Dependabot alerts:', alertsError.message);
-                // 如果无法获取，继续使用 summary 链接
-              }
-              
               // 创建评论内容，包含指向 Actions summary 的链接（在新标签页打开）
               let commentBody = `## Dependency Review\n\n`;
               commentBody += `⚠️ **检测到安全漏洞**\n\n`;
               commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n\n`;
-              
-              // 如果有漏洞详情，显示详细信息
-              if (vulnerabilitiesInfo) {
-                commentBody += vulnerabilitiesInfo;
-                commentBody += `\n`;
-              }
-              
-              commentBody += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">查看完整的依赖安全检查报告</a>\n\n`;
-              
-              if (!vulnerabilitiesInfo) {
-                commentBody += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。你可以在报告页面查看每个漏洞建议升级到的版本。\n\n`;
-              }
-              
+              commentBody += `<a href="${summaryUrl}" target="_blank" rel="noopener noreferrer">查看完整的依赖安全检查报告（包含修复版本建议）</a>\n\n`;
+              commentBody += `**提示**: Dependabot 会自动创建 PR 来修复安全漏洞。你可以在报告页面查看每个漏洞建议升级到的版本。\n\n`;
               commentBody += `---\n`;
               commentBody += `*此评论由 GitHub Actions 自动生成*\n`;
 

@@ -1,0 +1,187 @@
+name: Auto Fix Vulnerabilities
+
+on:
+  schedule:
+    # 每天 UTC 时间 2:00 检查一次
+    - cron: '0 2 * * *'
+  workflow_dispatch: # 允许手动触发
+
+permissions:
+  contents: write
+  pull-requests: write
+  security-events: read
+  # 注意：访问 Dependabot alerts 需要仓库级别的权限设置
+
+jobs:
+  auto-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Get Dependabot alerts
+        id: get-alerts
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const { data: alerts } = await github.rest.dependabot.listAlertsForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open'
+              });
+              
+              console.log(`找到 ${alerts.length} 个开放的漏洞警报`);
+              
+              // 提取需要修复的依赖信息
+              const fixes = [];
+              alerts.forEach(alert => {
+                const patchedVersion = alert.security_vulnerability?.first_patched_version?.identifier;
+                if (patchedVersion) {
+                  fixes.push({
+                    name: alert.dependency?.package?.name,
+                    currentVersion: alert.dependency?.version,
+                    patchedVersion: patchedVersion,
+                    ecosystem: alert.dependency?.package?.ecosystem,
+                    severity: alert.security_vulnerability?.severity,
+                    ghsa_id: alert.security_advisory?.ghsa_id
+                  });
+                }
+              });
+              
+              console.log(`找到 ${fixes.length} 个可修复的漏洞`);
+              core.setOutput('fixes', JSON.stringify(fixes));
+              core.setOutput('has-fixes', fixes.length > 0 ? 'true' : 'false');
+            } catch (error) {
+              console.error('获取 Dependabot alerts 失败:', error);
+              core.setOutput('has-fixes', 'false');
+            }
+
+      - name: Auto fix vulnerabilities
+        if: steps.get-alerts.outputs.has-fixes == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fixes = JSON.parse('${{ steps.get-alerts.outputs.fixes }}');
+            
+            if (fixes.length === 0) {
+              console.log('没有需要修复的漏洞');
+              return;
+            }
+            
+            console.log(`准备修复 ${fixes.length} 个漏洞`);
+            
+            // 创建修复分支
+            const branchName = `dependabot/auto-fix-${Date.now()}`;
+            const fs = require('fs');
+            const { execSync } = require('child_process');
+            
+            // 配置 git
+            execSync('git config user.name "github-actions[bot]"');
+            execSync('git config user.email "github-actions[bot]@users.noreply.github.com"');
+            
+            // 创建新分支
+            execSync(`git checkout -b ${branchName}`);
+            
+            let hasChanges = false;
+            const changes = [];
+            
+            // 修复每个漏洞
+            for (const fix of fixes) {
+              if (fix.ecosystem !== 'maven') continue;
+              
+              console.log(`修复 ${fix.name}: ${fix.currentVersion} -> ${fix.patchedVersion}`);
+              
+              // 查找并更新 pom.xml 文件中的依赖版本
+              const pomFiles = [
+                'pom.xml',
+                'module-common/pom.xml',
+                'module-service/pom.xml',
+                'module-api/pom.xml'
+              ];
+              
+              for (const pomFile of pomFiles) {
+                if (!fs.existsSync(pomFile)) continue;
+                
+                let content = fs.readFileSync(pomFile, 'utf8');
+                const originalContent = content;
+                
+                // 匹配 Maven 依赖的多种格式：
+                // 1. <groupId>xxx</groupId><artifactId>log4j-core</artifactId><version>2.13.0</version>
+                // 2. 考虑可能的空白字符和换行
+                // 使用更灵活的匹配模式
+                const escapedName = fix.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const escapedCurrentVersion = fix.currentVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                
+                // 匹配完整的依赖块（groupId + artifactId + version）
+                const dependencyPattern = new RegExp(
+                  `(<groupId>[^<]*</groupId>\\s*<artifactId>${escapedName}</artifactId>\\s*<version>)${escapedCurrentVersion}(</version>)`,
+                  'g'
+                );
+                
+                if (dependencyPattern.test(content)) {
+                  content = content.replace(dependencyPattern, `$1${fix.patchedVersion}$2`);
+                  fs.writeFileSync(pomFile, content, 'utf8');
+                  hasChanges = true;
+                  changes.push(`${fix.name}: ${fix.currentVersion} -> ${fix.patchedVersion} (${pomFile})`);
+                  console.log(`已更新 ${pomFile} 中的 ${fix.name}`);
+                } else {
+                  // 尝试匹配 properties 中定义的版本变量
+                  // 例如：<log4j.version>2.13.0</log4j.version>
+                  const propertyPattern = new RegExp(
+                    `(<[^>]*\\.version>|<\\.version>)${escapedCurrentVersion}(</[^>]*>)`,
+                    'g'
+                  );
+                  if (propertyPattern.test(content)) {
+                    content = content.replace(propertyPattern, `$1${fix.patchedVersion}$2`);
+                    fs.writeFileSync(pomFile, content, 'utf8');
+                    hasChanges = true;
+                    changes.push(`${fix.name}: ${fix.currentVersion} -> ${fix.patchedVersion} (${pomFile}, properties)`);
+                    console.log(`已更新 ${pomFile} 中 properties 里的 ${fix.name} 版本`);
+                  }
+                }
+              }
+            }
+            
+            if (!hasChanges) {
+              console.log('没有找到需要更新的依赖');
+              return;
+            }
+            
+            // 提交更改
+            execSync('git add -A');
+            execSync(`git commit -m "fix: 自动修复安全漏洞\n\n${changes.join('\n')}"`);
+            execSync(`git push origin ${branchName}`);
+            
+            // 创建 PR
+            let prBody = `## 自动修复安全漏洞\n\n`;
+            prBody += `此 PR 自动创建，用于修复以下安全漏洞：\n\n`;
+            fixes.forEach((fix, index) => {
+              prBody += `${index + 1}. **${fix.name}**: \`${fix.currentVersion}\` → \`${fix.patchedVersion}\`\n`;
+              prBody += `   - 严重程度: ${fix.severity}\n`;
+              if (fix.ghsa_id) {
+                prBody += `   - GHSA: ${fix.ghsa_id}\n`;
+              }
+            });
+            prBody += `\n---\n*此 PR 由 GitHub Actions 自动创建*\n`;
+            
+            await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `fix: 自动修复 ${fixes.length} 个安全漏洞`,
+              head: branchName,
+              base: 'main',
+              body: prBody
+            });
+            
+            console.log('PR 创建成功');
+

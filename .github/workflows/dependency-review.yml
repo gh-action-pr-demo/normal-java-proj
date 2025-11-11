@@ -113,99 +113,164 @@ jobs:
               console.log(`新增漏洞数量: ${newVulnerabilities.length}`);
               console.log(`已存在漏洞数量: ${existingVulnerabilities.length}`);
 
+              // 合并所有漏洞（新增 + 已存在）
+              const allVulnerabilities = [...newVulnerabilities, ...existingVulnerabilities];
+              
+              // 统计漏洞包（去重）
+              const vulnerablePackages = new Set();
+              allVulnerabilities.forEach(vuln => {
+                vulnerablePackages.add(`${vuln.package.name}@${vuln.package.version}`);
+              });
+
               const hasNewVulns = newVulnerabilities.length > 0;
               const hasExistingVulns = existingVulnerabilities.length > 0;
-              const hasVulns = hasNewVulns || hasExistingVulns;
-              const changeType = diffRange.change_type || 'unknown';
-
-              let commentBody = `## 🔍 依赖安全检查报告\n\n`;
-              commentBody += `**检查时间**: ${new Date().toISOString()}\n`;
-              commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n`;
-              commentBody += `**变更类型**: ${changeType}\n\n`;
-
-              // 显示新增漏洞
-              if (hasNewVulns) {
-                commentBody += `### ⚠️ 本次 PR 引入的漏洞 (${newVulnerabilities.length} 个)\n\n`;
-                
-                const newSeverityCounts = {};
-                newVulnerabilities.forEach(vuln => {
-                  const severity = vuln.severity || 'unknown';
-                  newSeverityCounts[severity] = (newSeverityCounts[severity] || 0) + 1;
-                });
-
-                commentBody += `**漏洞统计**:\n`;
-                Object.entries(newSeverityCounts).forEach(([severity, count]) => {
-                  const emoji = severity === 'critical' ? '🔴' : severity === 'high' ? '🟠' : severity === 'moderate' ? '🟡' : '⚪';
-                  commentBody += `- ${emoji} **${severity.toUpperCase()}**: ${count} 个\n`;
-                });
-
-                commentBody += `\n**详细列表**:\n\n`;
-                newVulnerabilities.forEach((vuln, index) => {
-                  const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
-                  commentBody += `${index + 1}. ${severityEmoji} **${vuln.package.name}@${vuln.package.version}**\n`;
-                  commentBody += `   - **严重程度**: ${vuln.severity || 'unknown'}\n`;
-                  if (vuln.advisory) {
-                    commentBody += `   - **CVE**: ${vuln.advisory.ghsa_id || vuln.advisory.cve_id || 'N/A'}\n`;
-                    commentBody += `   - **摘要**: ${vuln.advisory.summary || 'N/A'}\n`;
-                    if (vuln.advisory.cvss?.score) {
-                      commentBody += `   - **CVSS 分数**: ${vuln.advisory.cvss.score}\n`;
-                    }
-                  }
-                  if (vuln.first_patched_version) {
-                    commentBody += `   - **建议升级至**: ${vuln.first_patched_version.identifier || vuln.first_patched_version}\n`;
-                  }
-                  commentBody += `\n`;
-                });
-              } else {
-                commentBody += `✅ **本次 PR 未引入新的安全漏洞**\n\n`;
-              }
-
-              // 显示已存在的漏洞
-              if (hasExistingVulns) {
-                commentBody += `\n### 📋 代码库中已存在的未修复漏洞 (${existingVulnerabilities.length} 个)\n\n`;
-                commentBody += `*这些漏洞在本次 PR 之前就已存在，建议尽快修复*\n\n`;
-                
-                const existingSeverityCounts = {};
-                existingVulnerabilities.forEach(vuln => {
-                  const severity = vuln.severity || 'unknown';
-                  existingSeverityCounts[severity] = (existingSeverityCounts[severity] || 0) + 1;
-                });
-
-                commentBody += `**漏洞统计**:\n`;
-                Object.entries(existingSeverityCounts).forEach(([severity, count]) => {
-                  const emoji = severity === 'critical' ? '🔴' : severity === 'high' ? '🟠' : severity === 'moderate' ? '🟡' : '⚪';
-                  commentBody += `- ${emoji} **${severity.toUpperCase()}**: ${count} 个\n`;
-                });
-
-                commentBody += `\n**详细列表**:\n\n`;
-                existingVulnerabilities.forEach((vuln, index) => {
-                  const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
-                  commentBody += `${index + 1}. ${severityEmoji} **${vuln.package.name}@${vuln.package.version}**\n`;
-                  commentBody += `   - **严重程度**: ${vuln.severity || 'unknown'}\n`;
-                  if (vuln.advisory) {
-                    commentBody += `   - **CVE**: ${vuln.advisory.ghsa_id || vuln.advisory.cve_id || 'N/A'}\n`;
-                    commentBody += `   - **摘要**: ${vuln.advisory.summary || 'N/A'}\n`;
-                    if (vuln.advisory.cvss?.score) {
-                      commentBody += `   - **CVSS 分数**: ${vuln.advisory.cvss.score}\n`;
-                    }
-                  }
-                  if (vuln.first_patched_version) {
-                    commentBody += `   - **建议升级至**: ${vuln.first_patched_version.identifier || vuln.first_patched_version}\n`;
-                  }
-                  commentBody += `\n`;
-                });
-              } else {
-                commentBody += `\n✅ **代码库中未发现已存在的安全漏洞**\n\n`;
-              }
-
-              // 显示依赖变更
+              const hasVulns = allVulnerabilities.length > 0;
+              
+              // 获取依赖变更和许可证信息
               const changes = diffRange.changes || [];
+              
+              // 统计许可证问题
+              let incompatibleLicenses = 0;
+              let invalidSpdxLicenses = 0;
+              let unknownLicenses = 0;
+              const licenseDetails = [];
+              
+              changes.forEach(change => {
+                if (change.change_type === 'added') {
+                  // 检查许可证信息
+                  if (change.license) {
+                    if (change.license === 'UNKNOWN' || !change.license) {
+                      unknownLicenses++;
+                      licenseDetails.push({
+                        name: change.name,
+                        version: change.version,
+                        manifest: change.manifest,
+                        license: change.license || 'UNKNOWN',
+                        type: 'unknown'
+                      });
+                    }
+                  } else {
+                    unknownLicenses++;
+                    licenseDetails.push({
+                      name: change.name,
+                      version: change.version,
+                      manifest: change.manifest,
+                      license: 'UNKNOWN',
+                      type: 'unknown'
+                    });
+                  }
+                }
+              });
+
+              // 格式化报告
+              let commentBody = `## Dependency Review\n\n`;
+              commentBody += `**Commit**: \`${context.payload.pull_request.head.sha.substring(0, 7)}\`\n`;
+              commentBody += `**检查时间**: ${new Date().toISOString()}\n\n`;
+              
+              commentBody += `The following issues were found:\n\n`;
+              
+              // 漏洞统计
+              if (vulnerablePackages.size > 0) {
+                commentBody += `❌ ${vulnerablePackages.size} vulnerable package(s)\n`;
+              } else {
+                commentBody += `✅ 0 vulnerable package(s)\n`;
+              }
+              
+              // 许可证统计
+              if (incompatibleLicenses > 0) {
+                commentBody += `❌ ${incompatibleLicenses} package(s) with incompatible licenses\n`;
+              } else {
+                commentBody += `✅ 0 package(s) with incompatible licenses\n`;
+              }
+              
+              if (invalidSpdxLicenses > 0) {
+                commentBody += `❌ ${invalidSpdxLicenses} package(s) with invalid SPDX license definitions\n`;
+              } else {
+                commentBody += `✅ 0 package(s) with invalid SPDX license definitions\n`;
+              }
+              
+              if (unknownLicenses > 0) {
+                commentBody += `⚠️ ${unknownLicenses} package(s) with unknown licenses.\n`;
+              } else {
+                commentBody += `✅ 0 package(s) with unknown licenses.\n`;
+              }
+
+              // 显示详细漏洞列表
+              if (hasVulns) {
+                commentBody += `\n### Vulnerable Packages\n\n`;
+                
+                // 按包分组漏洞
+                const vulnByPackage = {};
+                allVulnerabilities.forEach(vuln => {
+                  const pkgKey = `${vuln.package.name}@${vuln.package.version}`;
+                  if (!vulnByPackage[pkgKey]) {
+                    vulnByPackage[pkgKey] = {
+                      name: vuln.package.name,
+                      version: vuln.package.version,
+                      ecosystem: vuln.package.ecosystem || 'maven',
+                      vulnerabilities: []
+                    };
+                  }
+                  vulnByPackage[pkgKey].vulnerabilities.push(vuln);
+                });
+
+                Object.values(vulnByPackage).forEach((pkg, index) => {
+                  commentBody += `${index + 1}. **${pkg.name}@${pkg.version}**\n`;
+                  commentBody += `   - **Ecosystem**: ${pkg.ecosystem}\n`;
+                  commentBody += `   - **Vulnerabilities**: ${pkg.vulnerabilities.length}\n\n`;
+                  
+                  pkg.vulnerabilities.forEach((vuln, vulnIndex) => {
+                    const severityEmoji = vuln.severity === 'critical' ? '🔴' : vuln.severity === 'high' ? '🟠' : vuln.severity === 'moderate' ? '🟡' : '⚪';
+                    commentBody += `   ${vulnIndex + 1}. ${severityEmoji} **${vuln.severity || 'unknown'}** severity\n`;
+                    
+                    if (vuln.advisory) {
+                      const advisoryId = vuln.advisory.ghsa_id || vuln.advisory.cve_id || 'N/A';
+                      commentBody += `      - **Advisory**: ${advisoryId}\n`;
+                      if (vuln.advisory.summary) {
+                        commentBody += `      - **Summary**: ${vuln.advisory.summary}\n`;
+                      }
+                      if (vuln.advisory.cvss?.score) {
+                        commentBody += `      - **CVSS Score**: ${vuln.advisory.cvss.score}\n`;
+                      }
+                    }
+                    
+                    if (vuln.first_patched_version) {
+                      const patchedVersion = vuln.first_patched_version.identifier || vuln.first_patched_version;
+                      commentBody += `      - **Patched Version**: ${patchedVersion}\n`;
+                    }
+                    
+                    commentBody += `\n`;
+                  });
+                });
+              }
+
+              // 显示许可证详情
+              if (licenseDetails.length > 0) {
+                commentBody += `\n### Packages with Unknown Licenses\n\n`;
+                licenseDetails.forEach((pkg, index) => {
+                  commentBody += `${index + 1}. **${pkg.name}@${pkg.version}**\n`;
+                  commentBody += `   - **Manifest**: ${pkg.manifest}\n`;
+                  commentBody += `   - **License**: ${pkg.license}\n\n`;
+                });
+              }
+
+              // 显示依赖变更摘要
               if (changes.length > 0) {
-                commentBody += `\n### 📦 依赖变更\n\n`;
+                commentBody += `\n### Dependency Changes\n\n`;
+                const added = changes.filter(c => c.change_type === 'added').length;
+                const removed = changes.filter(c => c.change_type === 'removed').length;
+                const updated = changes.filter(c => c.change_type === 'updated').length;
+                
+                if (added > 0) commentBody += `➕ Added: ${added}\n`;
+                if (removed > 0) commentBody += `➖ Removed: ${removed}\n`;
+                if (updated > 0) commentBody += `🔄 Updated: ${updated}\n`;
+                
+                commentBody += `\n<details>\n<summary>View all changes</summary>\n\n`;
                 changes.forEach(change => {
                   const changeTypeEmoji = change.change_type === 'added' ? '➕' : change.change_type === 'removed' ? '➖' : '🔄';
                   commentBody += `${changeTypeEmoji} **${change.manifest}**: ${change.name}@${change.version}\n`;
                 });
+                commentBody += `\n</details>\n`;
               }
 
               commentBody += `\n---\n`;

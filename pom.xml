@@ -23,8 +23,6 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <dependency-check.version>9.0.9</dependency-check.version>
-        <versions-maven-plugin.version>2.16.2</versions-maven-plugin.version>
     </properties>
 
     <dependencies>
@@ -69,59 +67,7 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
 
-            <!-- OWASP Dependency-Check Plugin -->
-            <plugin>
-                <groupId>org.owasp</groupId>
-                <artifactId>dependency-check-maven</artifactId>
-                <version>${dependency-check.version}</version>
-                <configuration>
-                    <!-- CVSS 阈值：超过此分数将导致构建失败 -->
-                    <failBuildOnCVSS>7.0</failBuildOnCVSS>
-                    <!-- 只生成 HTML 报告 -->
-                    <formats>
-                        <format>HTML</format>
-                    </formats>
-                    <!-- 报告输出目录 -->
-                    <outputDirectory>${project.build.directory}/dependency-check-reports</outputDirectory>
-                    <!-- 抑制文件：支持多个文件，项目级优先 -->
-                    <suppressionFiles>
-                        <!-- 组织级共享配置（如果存在） -->
-                        <suppressionFile>${project.basedir}/dependency-check-suppression.xml</suppressionFile>
-                    </suppressionFiles>
-                    <!-- 启用已退役的漏洞检查 -->
-                    <enableRetired>true</enableRetired>
-                    <!-- 跳过测试依赖 -->
-                    <skipTestScope>false</skipTestScope>
-                    <!-- 只检查直接依赖，不检查传递依赖 -->
-                    <excludeTransitive>true</excludeTransitive>
-                    <!-- NVD API key（可选）：如果不配置，会使用默认的速率限制 -->
-                    <!-- 如果需要更高的速率限制，可以通过环境变量 NVD_API_KEY 或 Maven 属性配置 -->
-                    <nvdApiKey>${env.NVD_API_KEY}</nvdApiKey>
-                    <!-- 数据镜像 URL（可选）：如果使用私服或镜像 -->
-                    <!-- <nvdDataMirror>https://your-mirror-url/nvd/</nvdDataMirror> -->
-                    <!-- 连接超时设置（秒） -->
-                    <connectionTimeout>20000</connectionTimeout>
-                    <!-- 读取超时设置（秒） -->
-                    <readTimeout>20000</readTimeout>
-                </configuration>
-                <executions>
-                    <execution>
-                        <goals>
-                            <goal>check</goal>
-                        </goals>
-                    </execution>
-                </executions>
-            </plugin>
-
-            <!-- Versions Maven Plugin -->
-            <plugin>
-                <groupId>org.codehaus.mojo</groupId>
-                <artifactId>versions-maven-plugin</artifactId>
-                <version>${versions-maven-plugin.version}</version>
-                <configuration>
-                    <outputFile>${project.build.directory}/dependency-updates.txt</outputFile>
-                </configuration>
-            </plugin>
+            
         </plugins>
     </build>
 </project>

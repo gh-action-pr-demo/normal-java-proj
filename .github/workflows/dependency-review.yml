@@ -1,0 +1,110 @@
+name: Dependency Review
+
+on:
+  pull_request:
+    # 对所有 PR 触发（不再仅限 main/master）
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  dependency-review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect event and parse context
+        id: ctx
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const eventName = context.eventName;
+            const result = {
+              event: eventName,
+              isPR: false,
+              prNumber: '',
+              headRef: '',
+              baseRef: '',
+              commentBody: ''
+            };
+            if (eventName === 'pull_request') {
+              result.isPR = true;
+              result.prNumber = context.payload.pull_request.number;
+              result.headRef = context.payload.pull_request.head.ref;
+              result.baseRef = context.payload.pull_request.base.ref;
+            } else if (eventName === 'issue_comment') {
+              const isPR = !!context.payload.issue.pull_request;
+              result.isPR = isPR;
+              result.prNumber = context.payload.issue.number;
+              result.commentBody = context.payload.comment.body || '';
+              if (isPR) {
+                const pr = await github.rest.pulls.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  pull_number: result.prNumber
+                });
+                result.headRef = pr.data.head.ref;
+                result.baseRef = pr.data.base.ref;
+              }
+            }
+            core.setOutput('event', result.event);
+            core.setOutput('isPR', String(result.isPR));
+            core.setOutput('prNumber', String(result.prNumber));
+            core.setOutput('headRef', result.headRef);
+            core.setOutput('baseRef', result.baseRef);
+            core.setOutput('commentBody', result.commentBody);
+
+      - name: No-op when issue_comment is not on a PR
+        if: github.event_name == 'issue_comment' && steps.ctx.outputs.isPR != 'true'
+        run: echo "Issue comment is not on a PR. Nothing to do." && exit 0
+
+      - name: Check comment keywords (trigger or skip)
+        id: kw
+        if: github.event_name == 'issue_comment'
+        shell: bash
+        env:
+          COMMENT_BODY: ${{ steps.ctx.outputs.commentBody }}
+        run: |
+          body_lc="$(printf "%s" "$COMMENT_BODY" | tr '[:upper:]' '[:lower:]')"
+          # 仅支持“跳过检查”的关键字（保持与之前设计一致的四种写法）
+          # [skip dependency check] | [skip-dependency-check] | [skip dependency-check] | [skip-dependency check]
+          if echo "$body_lc" | grep -qE '\[skip dependency check\]|\[skip-dependency-check\]|\[skip dependency-check\]|\[skip-dependency check\]'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip by keyword (commented)
+        if: github.event_name == 'issue_comment' && steps.kw.outputs.skip == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number("${{ steps.ctx.outputs.prNumber }}"),
+              body: "✅ 已根据评论关键字跳过依赖变更审查（Dependency Review）。"
+            });
+            core.notice('Skip keyword detected. Dependency review skipped.');
+          result-encoding: string
+
+      - name: Early exit after skip
+        if: github.event_name == 'issue_comment' && steps.kw.outputs.skip == 'true'
+        run: echo "Skipped by keyword." && exit 0
+
+      - name: No-op for non-skip comments
+        if: github.event_name == 'issue_comment' && steps.kw.outputs.skip != 'true'
+        run: echo "Comment does not contain skip keywords. Nothing to do." && exit 0
+
+      - name: Dependency Review
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: true
+          base-ref: ${{ steps.ctx.outputs.baseRef }}
+          head-ref: ${{ steps.ctx.outputs.headRef }}
+
+

@@ -33,22 +33,7 @@ GitHub 的 Dependabot 可以自动创建 PR 来修复安全漏洞。要启用此
 1. 进入仓库的 **Security** → **Dependabot** 页面
 2. 点击 **Check for updates** 按钮
 
-### 4. 自动修复工作流
-
-仓库中还配置了 `.github/workflows/auto-fix-vulnerabilities.yml`，这是一个自定义的自动修复工作流：
-
-- **触发方式**：
-  - 每天 UTC 时间 2:00 自动运行
-  - 可以手动在 Actions 页面触发（workflow_dispatch）
-  
-- **功能**：
-  - 获取所有开放的 Dependabot alerts
-  - 自动更新 pom.xml 中的漏洞依赖版本
-  - 创建修复 PR
-
-**注意**：此工作流需要访问 Dependabot alerts API，可能需要额外的权限配置。
-
-### 5. 查看漏洞报告
+### 4. 查看漏洞报告
 
 当检测到安全漏洞时：
 

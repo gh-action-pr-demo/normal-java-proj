@@ -20,3 +20,4 @@ xxx
 *.md
 *.css
 .sh
+!DEPENDENCY_SECURITY_DEMO_EN.md

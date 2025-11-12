@@ -47,7 +47,6 @@
                 <artifactId>module-service</artifactId>
                 <version>${project.version}</version>
             </dependency>
-
             <!-- Apache Commons -->
             <dependency>
                 <groupId>org.apache.commons</groupId>

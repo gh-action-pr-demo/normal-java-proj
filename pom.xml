@@ -25,14 +25,13 @@
         <module>module-service</module>
         <module>module-api</module>
     </modules>
-
     <properties>
         <java.version>17</java.version>
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <lombok.version>1.18.30</lombok.version>
-        <commons-lang3.version>3.14.0</commons-lang3.version>
+        <commons-lang3.version>3.2.1</commons-lang3.version>
     </properties>
 
     <dependencyManagement>
@@ -48,7 +47,6 @@
                 <artifactId>module-service</artifactId>
                 <version>${project.version}</version>
             </dependency>
-
             <!-- Apache Commons -->
             <dependency>
                 <groupId>org.apache.commons</groupId>

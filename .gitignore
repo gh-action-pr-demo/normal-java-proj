@@ -16,3 +16,9 @@ buildNumber.properties
 # JDT-specific (Eclipse Java Development Tools)
 .classpath
 xxx
+
+*.md
+*.css
+.sh
+!DEPENDENCY_SECURITY_DEMO_EN.md
+!DEPENDENCY_SECURITY_DEMO.md

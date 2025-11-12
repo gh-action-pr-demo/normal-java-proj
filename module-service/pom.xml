@@ -36,11 +36,34 @@
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
 
-        <!-- 演示漏洞扫描用途：存在已知漏洞的 Log4j 版本 -->
+        <!-- 演示漏洞扫描用途：存在已知漏洞的依赖包 -->
+        <!-- Log4j 漏洞 (CVE-2021-44228, CVE-2021-45046) -->
         <dependency>
             <groupId>org.apache.logging.log4j</groupId>
             <artifactId>log4j-core</artifactId>
-            <version>2.13.0</version>
+            <version>2.11.0</version>  
+        </dependency>
+        
+        <!-- Apache Commons Collections 反序列化漏洞 (CVE-2015-6420) -->
+        <dependency>
+            <groupId>commons-collections</groupId>
+            <artifactId>commons-collections</artifactId>
+            <version>3.2.1</version>
+        </dependency>
+
+        <!-- Apache Commons Compress 漏洞 (CVE-2021-35515, CVE-2021-35516, CVE-2021-35517) -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-compress</artifactId>
+            <version>1.19</version>
+        </dependency>
+
+        <!-- Guava 旧版本漏洞演示 -->
+        <!-- Guava 19.0 存在一些安全问题 -->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>19.0</version>
         </dependency>
 
         <!-- Lombok -->

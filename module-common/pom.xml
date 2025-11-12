@@ -33,11 +33,11 @@
 
         <!-- JSON处理 -->
         <!-- Jackson 反序列化漏洞 (CVE-2019-14379, CVE-2019-14540) -->
-        <dependency>
+        <!-- <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
             <version>2.9.8</version>
-        </dependency>
+        </dependency> -->
 
         <!-- Guava 旧版本漏洞演示 -->
         <!-- Guava 18.0 及更早版本存在安全漏洞 -->
